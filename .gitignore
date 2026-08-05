@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+plantuml-1.2025.10.jar
+.vscode/
+diagrams/

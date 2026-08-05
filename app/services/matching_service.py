@@ -1,0 +1,486 @@
+"""
+app/services/matching_service.py
+
+Scores listings against a buyer's freeform preferences using whichever AI
+provider is configured (settings.AI_PROVIDER). Previously this was two
+separate files (semantic_match.py / semantic_match_openai.py) that required
+commenting/uncommenting an import line in app.py to switch — that's fragile
+and easy to forget. Now it's one env var: AI_PROVIDER=anthropic|openai.
+"""
+
+import json
+import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
+from app.config import settings, VALID_AI_PROVIDERS
+
+SYSTEM_PROMPT = """You are a real estate matching assistant. You will be given:
+1. A buyer's freeform description of what they want in a home.
+2. A batch of listings, each with an id, basic specs (including stories,
+   property_type, and hoa_fee when available), a free-text description, and
+   school_ratings — a 1-10 rating for the assigned elementary/middle/high
+   school, when available.
+
+For EACH listing, do NOT compute a numeric score yourself — the calling
+system computes that deterministically from the requirements breakdown you
+provide below. Your job is only to identify requirements and judge each one
+honestly.
+
+Step 1 — break the buyer's preferences into distinct, named requirements.
+"Quiet cul-de-sac, near Caltrain, and away from the highway" is THREE
+requirements, not one or two — do not merge related-sounding ones together.
+If the buyer's text is too vague to break into multiple distinct asks (e.g.
+just "nice house" or "any"), use a single requirement summarizing it.
+
+Step 2 — for each requirement, judge whether THIS listing's description (and
+structured fields — school_ratings when the buyer mentions schools/kids/
+family; stories and phrases like "no stairs" or "walk-in shower" when they
+mention accessibility; hoa_fee/property_type when they mention condos or
+low-maintenance living) clearly supports it: true or false. Be honest — mark
+true only when the listing's actual text/data supports it, not because it
+seems plausible. If a requirement is never mentioned or contradicted, mark it
+false — do not give credit for silence.
+
+Step 3 — write one specific sentence explaining the requirements breakdown,
+referencing what was met and what wasn't.
+
+Respond with ONLY a JSON array, no other text, in this exact shape:
+[
+  {
+    "mls_id": "...",
+    "requirements": [
+      {"text": "short label for requirement 1", "met": true},
+      {"text": "short label for requirement 2", "met": false}
+    ],
+    "reason": "one sentence, specific, citing what in the listing supported or failed each requirement"
+  }
+]
+"""
+
+
+def _build_listing_payload(listings_batch: list[dict]) -> list[dict]:
+    return [
+        {
+            "mls_id": l["mls_id"],
+            "price": l["price"],
+            "beds": l["beds"],
+            "baths": l["baths"],
+            "sqft": l["sqft"],
+            "stories": l.get("stories"),
+            "property_type": l.get("property_type"),
+            "hoa_fee": l.get("hoa_fee"),
+            "description": l["description"],
+            "school_ratings": l.get("school_ratings"),
+        }
+        for l in listings_batch
+    ]
+
+
+def _parse_response_text(text: str) -> list[dict]:
+    text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        print("Warning: failed to parse model output, skipping batch:\n", text)
+        return []
+
+
+def _retry_with_backoff(fn, max_attempts=4, base_delay=2.0, on_retry=None):
+    """
+    Retries fn() on rate-limit errors with exponential backoff (2s, 4s, 8s...).
+    Rate limits (too many requests/tokens per minute) are expected, temporary
+    conditions — especially now that batches run concurrently
+    (MAX_CONCURRENT_BATCHES) — not a real failure, so retrying briefly is the
+    standard approach rather than immediately surfacing an error to the user.
+    Any other exception (auth, not-found, etc.) is raised immediately, since
+    those won't resolve by waiting.
+
+    on_retry(attempt, delay), if given, is called each time a retry is about
+    to happen — used by the job runner to surface "this is retrying" to the
+    frontend via the poll endpoint, not just as a terminal print.
+    """
+    import time
+    import anthropic
+    import openai
+
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except (anthropic.RateLimitError, openai.RateLimitError):
+            if attempt == max_attempts - 1:
+                raise
+            delay = base_delay * (2 ** attempt)
+            print(f"[rate limit] Hit 429, retrying in {delay:.0f}s (attempt {attempt + 1}/{max_attempts})...")
+            if on_retry:
+                on_retry(attempt + 1, delay)
+            time.sleep(delay)
+
+
+def _log_rate_limit_headers(provider: str, headers) -> None:
+    """
+    Prints the current rate-limit standing after every API call, straight
+    to the uvicorn terminal — the most precise, real-time source for this
+    (no Console dashboard lag). Anthropic and OpenAI use different header
+    names for the same concepts, so each is read separately; missing
+    headers are shown as '?' rather than crashing, since header sets can
+    change between SDK/API versions.
+    """
+    if provider == "Anthropic":
+        req_remaining = headers.get("anthropic-ratelimit-requests-remaining", "?")
+        req_limit = headers.get("anthropic-ratelimit-requests-limit", "?")
+        tok_remaining = headers.get("anthropic-ratelimit-tokens-remaining", "?")
+        tok_limit = headers.get("anthropic-ratelimit-tokens-limit", "?")
+        reset = headers.get("anthropic-ratelimit-requests-reset", "?")
+    else:  # OpenAI
+        req_remaining = headers.get("x-ratelimit-remaining-requests", "?")
+        req_limit = headers.get("x-ratelimit-limit-requests", "?")
+        tok_remaining = headers.get("x-ratelimit-remaining-tokens", "?")
+        tok_limit = headers.get("x-ratelimit-limit-tokens", "?")
+        reset = headers.get("x-ratelimit-reset-requests", "?")
+
+    print(
+        f"[{provider} rate limits] requests: {req_remaining}/{req_limit} remaining  |  "
+        f"tokens: {tok_remaining}/{tok_limit} remaining  |  resets: {reset}"
+    )
+
+
+def _score_batch_anthropic(user_preferences: str, listings_batch: list[dict], on_retry=None) -> list[dict]:
+    import anthropic
+
+    if not settings.ANTHROPIC_API_KEY:
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY is not set — required to use Claude as the AI provider. "
+            "Add it to .env, or select a different provider."
+        )
+
+    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    user_message = f"Buyer wants: {user_preferences}\n\nListings:\n{json.dumps(_build_listing_payload(listings_batch), indent=2)}"
+
+    def call():
+        # with_raw_response gives access to the actual HTTP headers (rate
+        # limit info) alongside the parsed response — .parse() below gets
+        # you the normal Message object, same as client.messages.create()
+        # would have returned directly.
+        raw = client.messages.with_raw_response.create(
+            model=settings.ANTHROPIC_MODEL,
+            max_tokens=settings.MAX_TOKENS,
+            temperature=settings.TEMPERATURE,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        _log_rate_limit_headers("Anthropic", raw.headers)
+        return raw.parse()
+
+    try:
+        response = _retry_with_backoff(call, on_retry=on_retry)
+    except anthropic.RateLimitError as e:
+        raise RuntimeError(
+            "Anthropic rate limit hit repeatedly even after retrying — you're sending requests "
+            "faster than your account's current limit allows. Try lowering MAX_CONCURRENT_BATCHES "
+            "in .env, or check your rate limits in the Anthropic Console."
+        ) from e
+    except anthropic.AuthenticationError as e:
+        raise RuntimeError(
+            "Anthropic authentication failed — check ANTHROPIC_API_KEY in .env and that billing is set up."
+        ) from e
+    except anthropic.NotFoundError as e:
+        raise RuntimeError(f"Model '{settings.ANTHROPIC_MODEL}' not found or not available on your account.") from e
+    except anthropic.APIStatusError as e:
+        raise RuntimeError(f"Anthropic API error ({e.status_code}): {e.message}") from e
+
+    return _parse_response_text(response.content[0].text)
+
+
+def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_retry=None) -> list[dict]:
+    import openai
+    from openai import OpenAI, AuthenticationError, NotFoundError, APIStatusError
+
+    if not settings.OPENAI_API_KEY:
+        raise RuntimeError(
+            "OPENAI_API_KEY is not set — required to use OpenAI as the AI provider. "
+            "Add it to .env, or select a different provider."
+        )
+
+    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+    user_message = f"Buyer wants: {user_preferences}\n\nListings:\n{json.dumps(_build_listing_payload(listings_batch), indent=2)}"
+
+    def call():
+        # No temperature by default — newer OpenAI models (gpt-5.6 and
+        # later) reject any non-default value while reasoning is active,
+        # unlike Anthropic's API. Per OpenAI's docs, temperature is only
+        # accepted alongside reasoning_effort="none" specifically — so we
+        # only attempt it in that one case, and let it fail loudly and
+        # clearly (via the existing APIStatusError handling below) if that
+        # combination isn't actually accepted for this particular model.
+        # This makes the behavior empirically verifiable rather than
+        # something we just assume works.
+        kwargs = {
+            "model": settings.OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            "max_completion_tokens": settings.MAX_TOKENS,
+        }
+        if settings.OPENAI_REASONING_EFFORT:
+            kwargs["reasoning_effort"] = settings.OPENAI_REASONING_EFFORT
+        if settings.OPENAI_REASONING_EFFORT == "none":
+            kwargs["temperature"] = settings.TEMPERATURE
+
+        raw = client.chat.completions.with_raw_response.create(**kwargs)
+        _log_rate_limit_headers("OpenAI", raw.headers)
+        return raw.parse()
+
+    try:
+        response = _retry_with_backoff(call, on_retry=on_retry)
+    except openai.RateLimitError as e:
+        raise RuntimeError(
+            "OpenAI rate limit hit repeatedly even after retrying — you're sending requests faster "
+            "than your account's current limit allows. Try lowering MAX_CONCURRENT_BATCHES in .env, "
+            "or check your rate limits at platform.openai.com."
+        ) from e
+    except AuthenticationError as e:
+        raise RuntimeError(
+            "OpenAI authentication failed — check OPENAI_API_KEY in .env and that billing is set up."
+        ) from e
+    except NotFoundError as e:
+        raise RuntimeError(f"Model '{settings.OPENAI_MODEL}' not found or not available on your account.") from e
+    except APIStatusError as e:
+        raise RuntimeError(f"OpenAI API error ({e.status_code}): {e.message}") from e
+
+    return _parse_response_text(response.choices[0].message.content)
+
+
+def _compute_deterministic_scores(raw_items: list[dict]) -> list[dict]:
+    """
+    Converts the model's per-listing requirements-met breakdown into an
+    actual 0-100 score computed by OUR code, not trusted directly from the
+    model.
+
+    Why: earlier versions asked the model to compute its own score under a
+    ceiling rule ("cap at 55 if missing 1 of N requirements"). Testing
+    repeatedly showed the model's REASON TEXT would correctly identify a
+    missed requirement ("doesn't mention Caltrain") while the SCORE ignored
+    its own stated ceiling and came back 100 anyway — the model wasn't
+    reliably doing that arithmetic itself. Asking it to output simple
+    per-requirement booleans (a much more constrained, reliable judgment)
+    and doing the actual score = round(100 * met/total) math in Python
+    removes that failure mode entirely, since the model can no longer
+    "forget" to apply the cap — there's no cap for it to apply or skip.
+    """
+    results = []
+    for item in raw_items:
+        reqs = item.get("requirements", [])
+        if reqs:
+            total = len(reqs)
+            met = sum(1 for r in reqs if r.get("met"))
+            score = round(100 * met / total)
+        else:
+            # Model didn't break preferences into requirements at all
+            # (shouldn't normally happen given the prompt, but don't crash
+            # if it does) — neutral fallback rather than silently dropping
+            # this listing from results entirely. total=0 signals "unknown"
+            # to callers doing count-based filtering below.
+            score = 50
+            total = 0
+            met = 0
+        results.append({
+            "mls_id": item.get("mls_id"),
+            "score": score,
+            "reason": item.get("reason", ""),
+            "requirements_total": total,
+            "requirements_met": met,
+        })
+    return results
+
+
+def score_batch(user_preferences: str, listings_batch: list[dict], ai_provider: str = None, on_retry=None) -> list[dict]:
+    provider = ai_provider or settings.AI_PROVIDER
+    if provider not in VALID_AI_PROVIDERS:
+        raise ValueError(f"ai_provider must be one of {VALID_AI_PROVIDERS}, got '{provider}'")
+    if provider == "openai":
+        raw = _score_batch_openai(user_preferences, listings_batch, on_retry)
+    else:
+        raw = _score_batch_anthropic(user_preferences, listings_batch, on_retry)
+    return _compute_deterministic_scores(raw)
+
+
+def rank_listings(user_preferences: str, listings: list[dict], ai_provider: str = None) -> list[dict]:
+    """Batches, scores, merges, filters by threshold, sorts best-first.
+    Synchronous, blocking, no cancellation — kept for the CLI script and
+    anything that just wants a single call/response. The API's /match/start
+    endpoint uses the job-based version below instead, which supports
+    real mid-search cancellation.
+
+    Batches run concurrently (up to settings.MAX_CONCURRENT_BATCHES at once)
+    rather than one at a time — for a large search this is the single
+    biggest lever on total wall-clock time, since network/API latency per
+    batch otherwise adds up linearly.
+
+    Every ranked listing carries requirements_total/requirements_met so the
+    frontend can show "2/3 requirements met" transparently and separate full
+    matches from partial ones — deliberately NOT a user-configurable filter
+    (asking someone to pre-declare which of their own stated requirements
+    they're willing to have ignored, before seeing any results, doesn't
+    make sense as a control).
+    """
+    batches = [listings[i:i + settings.BATCH_SIZE] for i in range(0, len(listings), settings.BATCH_SIZE)]
+    scores_by_id = {}
+
+    with ThreadPoolExecutor(max_workers=settings.MAX_CONCURRENT_BATCHES) as executor:
+        futures = [executor.submit(score_batch, user_preferences, batch, ai_provider) for batch in batches]
+        for future in as_completed(futures):
+            for r in future.result():
+                scores_by_id[str(r["mls_id"])] = r  # str() — model may return ids as strings even when source has ints
+
+    ranked = []
+    for listing in listings:
+        result = scores_by_id.get(str(listing["mls_id"]))
+        if not result:
+            continue
+        if result["score"] < settings.SCORE_THRESHOLD:
+            continue
+        ranked.append({
+            **listing,
+            "match_score": result["score"],
+            "match_reason": result["reason"],
+            "requirements_total": result.get("requirements_total", 0),
+            "requirements_met": result.get("requirements_met", 0),
+        })
+
+    ranked.sort(key=lambda x: x["match_score"], reverse=True)
+    return ranked
+
+
+# ---------------------------------------------------------------------------
+# Job-based matching with real mid-search cancellation.
+#
+# Each search runs in a background thread. Between batches (not mid-batch —
+# an already-sent API call can't be recalled), the thread checks a
+# threading.Event. If it's set, the loop stops immediately: no further
+# batches get sent, and whatever was already scored is returned as partial
+# results. Jobs live in an in-memory dict — fine for a single-user local
+# app; a real multi-user deployment would use Redis or a proper task queue
+# (Celery, RQ) instead, since this dict is lost on server restart and
+# doesn't work across multiple server processes.
+# ---------------------------------------------------------------------------
+
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+def start_match_job(user_preferences: str, listings: list[dict], ai_provider: str = None) -> str:
+    job_id = str(uuid.uuid4())
+    total_batches = (len(listings) + settings.BATCH_SIZE - 1) // settings.BATCH_SIZE if listings else 0
+
+    job = {
+        "status": "running",       # running | done | cancelled | error
+        "results": [],
+        "error": None,
+        "cancel_event": threading.Event(),
+        "total_batches": total_batches,
+        "completed_batches": 0,
+        "in_flight_count": 0,      # how many batches are actively running right now, at this instant
+        "retry_count": 0,          # cumulative retries triggered so far across the whole job
+        "job_lock": threading.Lock(),  # protects retry_count from concurrent batch threads
+    }
+    with _jobs_lock:
+        _jobs[job_id] = job
+
+    thread = threading.Thread(target=_run_job, args=(job_id, user_preferences, listings, ai_provider), daemon=True)
+    thread.start()
+    return job_id
+
+
+def _run_job(job_id: str, user_preferences: str, listings: list[dict], ai_provider: str = None):
+    """
+    Runs up to settings.MAX_CONCURRENT_BATCHES batches at once instead of
+    one-at-a-time — the sliding-window pattern below submits a fresh batch
+    each time one finishes, keeping that many in flight simultaneously.
+    Cancellation still works the same as before: once cancel_event is set,
+    no NEW batches are submitted, but whichever are already in flight (up to
+    MAX_CONCURRENT_BATCHES of them) are allowed to finish rather than
+    abandoned mid-request.
+    """
+    job = _jobs[job_id]
+    cancel_event = job["cancel_event"]
+    scores_by_id = {}
+    batches = [listings[i:i + settings.BATCH_SIZE] for i in range(0, len(listings), settings.BATCH_SIZE)]
+    batch_iter = iter(batches)
+
+    def on_retry(attempt, delay):
+        with job["job_lock"]:
+            job["retry_count"] += 1
+
+    try:
+        with ThreadPoolExecutor(max_workers=settings.MAX_CONCURRENT_BATCHES) as executor:
+            in_flight = {}  # future -> True, just used as a set with quick membership ops
+
+            def submit_next():
+                if cancel_event.is_set():
+                    return
+                batch = next(batch_iter, None)
+                if batch is not None:
+                    in_flight[executor.submit(score_batch, user_preferences, batch, ai_provider, on_retry)] = True
+                job["in_flight_count"] = len(in_flight)
+
+            for _ in range(settings.MAX_CONCURRENT_BATCHES):
+                submit_next()
+
+            while in_flight:
+                done, _ = wait(in_flight.keys(), return_when=FIRST_COMPLETED)
+                for future in done:
+                    for r in future.result():
+                        scores_by_id[str(r["mls_id"])] = r
+                    job["completed_batches"] += 1
+                    del in_flight[future]
+                    submit_next()  # keep the window full, unless cancelled
+
+        ranked = []
+        for listing in listings:
+            result = scores_by_id.get(str(listing["mls_id"]))
+            if not result:
+                continue
+            if result["score"] < settings.SCORE_THRESHOLD:
+                continue
+            ranked.append({
+                **listing,
+                "match_score": result["score"],
+                "match_reason": result["reason"],
+                "requirements_total": result.get("requirements_total", 0),
+                "requirements_met": result.get("requirements_met", 0),
+            })
+        ranked.sort(key=lambda x: x["match_score"], reverse=True)
+
+        job["results"] = ranked
+        job["status"] = "cancelled" if cancel_event.is_set() else "done"
+    except Exception as e:
+        # Deliberately broad, not just RuntimeError — this is the last line
+        # of defense for a background thread. Anything raised in here
+        # (a missing API key, an SDK-specific exception type we didn't
+        # anticipate, whatever) MUST still flip the job to "error" status.
+        # Without this, an exception type we didn't explicitly catch would
+        # silently kill the thread while leaving job["status"] stuck at
+        # "running" forever — the frontend would then poll an endpoint that
+        # never changes, spinning indefinitely with no error shown at all.
+        # (This is exactly what happened before this fix: a missing
+        # OPENAI_API_KEY raised an OpenAI-SDK-specific exception, not a
+        # RuntimeError, so it slipped past the narrower except clause here.)
+        job["status"] = "error"
+        job["error"] = str(e)
+
+
+def cancel_job(job_id: str) -> bool:
+    """Signals the background thread to stop before its next batch. Returns
+    False if the job doesn't exist (already cleaned up, or bad id)."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return False
+    job["cancel_event"].set()
+    return True
+
+
+def get_job(job_id: str) -> dict | None:
+    with _jobs_lock:
+        return _jobs.get(job_id)

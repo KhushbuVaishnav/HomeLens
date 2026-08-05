@@ -1,0 +1,97 @@
+[
+  {
+    "mlsId": 47639149,
+    "listPrice": 285000,
+    "address": {
+      "full": "123 Example St",
+      "city": "Houston",
+      "state": "TX",
+      "postalCode": "77002"
+    },
+    "property": {
+      "roof": "Composition",
+      "style": "Traditional",
+      "area": 3148,
+      "bathsFull": 3,
+      "bathsHalf": 1,
+      "stories": 2,
+      "fireplaces": 1,
+      "heating": "Central Gas",
+      "bedrooms": 4,
+      "interiorFeatures": "Alarm System, Breakfast Bar",
+      "lotSize": "8425",
+      "exteriorFeatures": "Back Yard, Fenced",
+      "subdivision": "Lakes/Avalon Village Sec 1",
+      "type": "RES",
+      "yearBuilt": 2006
+    },
+    "remarks": "Beautifully updated home with a spacious open layout. Recently renovated kitchen features granite countertops and stainless appliances. Quiet cul-de-sac location, fenced backyard perfect for pets. Additional flex room downstairs ideal for a home office or study.",
+    "photos": [
+      "https://example.com/photo1.jpg",
+      "https://example.com/photo2.jpg"
+    ]
+  },
+  {
+    "mlsId": 47639150,
+    "listPrice": 412500,
+    "address": {
+      "full": "456 Sample Ave",
+      "city": "Houston",
+      "state": "TX",
+      "postalCode": "77019"
+    },
+    "property": {
+      "roof": "Tile",
+      "style": "Contemporary",
+      "area": 2650,
+      "bathsFull": 2,
+      "bathsHalf": 1,
+      "stories": 1,
+      "fireplaces": 0,
+      "heating": "Central Electric",
+      "bedrooms": 3,
+      "interiorFeatures": "Open Floor Plan, High Ceilings",
+      "lotSize": "6200",
+      "exteriorFeatures": "Covered Patio, Sprinkler System",
+      "subdivision": "River Oaks Adjacent",
+      "type": "RES",
+      "yearBuilt": 2018
+    },
+    "remarks": "Move-in ready single story on a busy corner lot near a major thoroughfare. Modern finishes throughout. Close to shopping and dining. Great starter home or investment property.",
+    "photos": [
+      "https://example.com/photo3.jpg"
+    ]
+  },
+  {
+    "mlsId": 47639151,
+    "listPrice": 329900,
+    "address": {
+      "full": "789 Demo Ln",
+      "city": "Houston",
+      "state": "TX",
+      "postalCode": "77005"
+    },
+    "property": {
+      "roof": "Composition",
+      "style": "Craftsman",
+      "area": 2100,
+      "bathsFull": 2,
+      "bathsHalf": 0,
+      "stories": 2,
+      "fireplaces": 1,
+      "heating": "Central Gas",
+      "bedrooms": 3,
+      "interiorFeatures": "Built-in Bookshelves, Wood Floors",
+      "lotSize": "5400",
+      "exteriorFeatures": "Front Porch, Mature Trees",
+      "subdivision": "Heights Historic District",
+      "type": "RES",
+      "yearBuilt": 1948
+    },
+    "remarks": "Charming updated craftsman on a quiet tree-lined street. Original hardwood floors, updated kitchen with custom cabinetry. Bonus room upstairs works well as a home office or nursery. Walking distance to local coffee shops.",
+    "photos": [
+      "https://example.com/photo4.jpg",
+      "https://example.com/photo5.jpg"
+    ]
+  }
+]
