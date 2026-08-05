@@ -180,10 +180,23 @@ button {
   padding: 24px;
   position: sticky;
   top: 96px;
+  /* Without these two lines, a sticky panel taller than the viewport just
+     extends past the bottom of the screen with no way to reach it except
+     scrolling the WHOLE page — which, with a long results column on the
+     right, means scrolling through every result first. Capping the height
+     and scrolling internally keeps the filter form (including the submit
+     button at the bottom) always reachable, independent of how much is in
+     the results column. */
+  max-height: calc(100vh - 96px - 24px);
+  overflow-y: auto;
 }
 
 @media (max-width: 860px) {
-  .spec-panel { position: static; }
+  .spec-panel {
+    position: static;
+    max-height: none;
+    overflow-y: visible;
+  }
 }
 
 .spec-panel__label {

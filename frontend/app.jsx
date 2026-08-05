@@ -2,12 +2,11 @@ const { useState, useRef, useEffect } = React;
 
 // Point this at wherever your FastAPI backend is running.
 // Auto-detects local dev vs deployed. Locally, talks to your local
-// backend. Once deployed, update the placeholder below with your real
-// Render backend URL (you'll get this after creating that service).
+// backend. When deployed, talks to your real Render backend below.
 const API_BASE =
   window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
     ? "http://127.0.0.1:8000"
-    : "https://YOUR-BACKEND-SERVICE-NAME.onrender.com"; // <-- replace after creating the Render backend
+    : "https://real-estate-matcher-sqlite.onrender.com";
 
 // Empty form input -> null (not sent as a filter), otherwise -> Number.
 // Used repeatedly below instead of repeating "value ? Number(value) : null" per field.
