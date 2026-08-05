@@ -188,7 +188,20 @@ def _score_batch_anthropic(user_preferences: str, listings_batch: list[dict], on
     except anthropic.APIStatusError as e:
         raise RuntimeError(f"Anthropic API error ({e.status_code}): {e.message}") from e
 
+    _log_token_usage("Anthropic", len(listings_batch), response.usage.input_tokens, response.usage.output_tokens)
     return _parse_response_text(response.content[0].text)
+
+
+def _log_token_usage(provider: str, batch_size: int, input_tokens: int, output_tokens: int) -> None:
+    """Prints EXACT token usage straight from the API response's own usage
+    field — reliable even under concurrency, unlike trying to infer usage
+    from the shared rate-limit 'remaining' headers (those reflect multiple
+    threads' calls interleaved against a bucket that's also continuously
+    refilling, so they can't be cleanly subtracted to get a single call's
+    real cost)."""
+    print(f"[{provider} usage] batch of {batch_size} listings — "
+          f"input: {input_tokens} tokens, output: {output_tokens} tokens, "
+          f"total: {input_tokens + output_tokens} tokens")
 
 
 def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_retry=None) -> list[dict]:
@@ -248,6 +261,7 @@ def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_re
     except APIStatusError as e:
         raise RuntimeError(f"OpenAI API error ({e.status_code}): {e.message}") from e
 
+    _log_token_usage("OpenAI", len(listings_batch), response.usage.prompt_tokens, response.usage.completion_tokens)
     return _parse_response_text(response.choices[0].message.content)
 
 
