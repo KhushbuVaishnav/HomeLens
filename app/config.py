@@ -53,7 +53,7 @@ class Settings:
     AI_PROVIDER: str = os.environ.get("AI_PROVIDER", "anthropic").lower()
     ANTHROPIC_API_KEY: str | None = os.environ.get("ANTHROPIC_API_KEY")
     OPENAI_API_KEY: str | None = os.environ.get("OPENAI_API_KEY")
-    ANTHROPIC_MODEL: str = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+    ANTHROPIC_MODEL: str = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
     OPENAI_MODEL: str = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna")
     OPENAI_REASONING_EFFORT: str | None = os.environ.get("OPENAI_REASONING_EFFORT") or None
     # Optional: "none" | "low" | "medium" | "high" | "xhigh". Unset by default,
