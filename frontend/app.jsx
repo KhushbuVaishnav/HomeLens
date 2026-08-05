@@ -7,7 +7,7 @@ const { useState, useRef, useEffect } = React;
 const API_BASE =
   window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
     ? "http://127.0.0.1:8000"
-    : "https://real-estate-matcher-sqlite.onrender.com"; // <-- replace after creating the Render backend
+    : "https://real-estate-matcher-sqlite-1.onrender.com"; // <-- replace after creating the Render backend
 
 // Empty form input -> null (not sent as a filter), otherwise -> Number.
 // Used repeatedly below instead of repeating "value ? Number(value) : null" per field.
