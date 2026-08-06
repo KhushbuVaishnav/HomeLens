@@ -127,7 +127,7 @@ def _matches_basic_filters(l: dict, filters: HardFilters) -> bool:
         return False
     if filters.max_beds and (prop.get("bedrooms") or 0) > filters.max_beds:
         return False
-    if filters.min_baths and (prop.get("bathsFull") or 0) < filters.min_baths:
+    if filters.min_baths and ((prop.get("bathsFull") or 0) + (prop.get("bathsHalf") or 0) * 0.5) < filters.min_baths:
         return False
     if filters.cities and addr.get("city") not in filters.cities:
         return False
@@ -178,7 +178,7 @@ def normalize_listing(raw: dict) -> dict:
         "city": addr.get("city"),
         "state": addr.get("state"),
         "beds": prop.get("bedrooms"),
-        "baths": prop.get("bathsFull"),
+        "baths": (prop.get("bathsFull") or 0) + (prop.get("bathsHalf") or 0) * 0.5,
         "sqft": prop.get("area"),
         "year_built": prop.get("yearBuilt"),
         "lot_size": prop.get("lotSize"),
