@@ -62,10 +62,13 @@ structured fields — school_ratings when the buyer mentions schools/kids/
 family; stories and phrases like "no stairs" or "walk-in shower" when they
 mention accessibility; hoa_fee/property_type when they mention condos or
 low-maintenance living; year_built when they mention a construction-year
-range, "newer," "historic," or similar) clearly supports it: true or false. Be
-honest — mark true only when the listing's actual text/data supports it, not
-because it seems plausible. If a requirement is never mentioned or
-contradicted, mark it false — do not give credit for silence.
+range, "newer," "historic," or similar; lot_size when they mention a "big
+yard," "large lot," an acreage figure, or similar; style when they name or
+rule out an architectural style, e.g. "farmhouse" or "not a ranch") clearly
+supports it: true or false. Be honest — mark true only when the listing's
+actual text/data supports it, not because it seems plausible. If a
+requirement is never mentioned or contradicted, mark it false — do not give
+credit for silence.
 
 Step 3 — write one specific sentence explaining the requirements breakdown,
 referencing what was met and what wasn't.
@@ -94,8 +97,10 @@ def _build_listing_payload(listings_batch: list[dict]) -> list[dict]:
             "sqft": l["sqft"],
             "stories": l.get("stories"),
             "property_type": l.get("property_type"),
+            "style": l.get("style"),
             "hoa_fee": l.get("hoa_fee"),
             "year_built": l.get("year_built"),
+            "lot_size": l.get("lot_size"),
             "description": l["description"],
             "school_ratings": l.get("school_ratings"),
         }
