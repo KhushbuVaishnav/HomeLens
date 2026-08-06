@@ -426,6 +426,31 @@ def _run_job(job_id: str, user_preferences: str, listings: list[dict], ai_provid
         with job["job_lock"]:
             job["retry_count"] += 1
 
+    def update_results_so_far():
+        """Rebuilds job['results'] from whatever's been scored so far and
+        writes it back — called after EVERY batch completes, not just once
+        at the very end. This is what lets the frontend show real results
+        progressively while a search is still running, instead of a blank
+        results area until the whole thing finishes. Cheap to do on every
+        batch: at most 500 listings, a plain filter+sort, negligible cost
+        next to the multi-second network calls this runs alongside."""
+        ranked = []
+        for listing in listings:
+            result = scores_by_id.get(str(listing["mls_id"]))
+            if not result:
+                continue
+            if result["score"] < settings.SCORE_THRESHOLD:
+                continue
+            ranked.append({
+                **listing,
+                "match_score": result["score"],
+                "match_reason": result["reason"],
+                "requirements_total": result.get("requirements_total", 0),
+                "requirements_met": result.get("requirements_met", 0),
+            })
+        ranked.sort(key=lambda x: x["match_score"], reverse=True)
+        job["results"] = ranked
+
     try:
         with ThreadPoolExecutor(max_workers=settings.MAX_CONCURRENT_BATCHES) as executor:
             in_flight = {}  # future -> True, just used as a set with quick membership ops
@@ -448,25 +473,9 @@ def _run_job(job_id: str, user_preferences: str, listings: list[dict], ai_provid
                         scores_by_id[str(r["mls_id"])] = r
                     job["completed_batches"] += 1
                     del in_flight[future]
+                    update_results_so_far()  # progressive results — every batch, not just the last one
                     submit_next()  # keep the window full, unless cancelled
 
-        ranked = []
-        for listing in listings:
-            result = scores_by_id.get(str(listing["mls_id"]))
-            if not result:
-                continue
-            if result["score"] < settings.SCORE_THRESHOLD:
-                continue
-            ranked.append({
-                **listing,
-                "match_score": result["score"],
-                "match_reason": result["reason"],
-                "requirements_total": result.get("requirements_total", 0),
-                "requirements_met": result.get("requirements_met", 0),
-            })
-        ranked.sort(key=lambda x: x["match_score"], reverse=True)
-
-        job["results"] = ranked
         job["status"] = "cancelled" if cancel_event.is_set() else "done"
     except Exception as e:
         # Deliberately broad, not just RuntimeError — this is the last line

@@ -309,9 +309,9 @@ function App() {
         const data = await res.json();
         setProgress({ completed: data.completed_batches, total: data.total_batches, inFlight: data.in_flight_count || 0 });
         setRetryCount(data.retry_count || 0);
+        setResults(data.matches || []); // progressive — updates every poll, not just at completion
 
         if (data.status === "done" || data.status === "cancelled") {
-          setResults(data.matches || []);
           setWasCancelled(data.status === "cancelled");
           setStatus("done");
           return;
@@ -572,8 +572,10 @@ function App() {
         <section>
           <div className="results-header">
             <h2 className="results-header__title">Matches</h2>
-            {status === "done" && (
-              <span className="results-header__count">{results.length} listing{results.length === 1 ? "" : "s"}</span>
+            {results.length > 0 && (
+              <span className="results-header__count">
+                {results.length} listing{results.length === 1 ? "" : "s"}{status === "loading" ? " so far" : ""}
+              </span>
             )}
           </div>
 
