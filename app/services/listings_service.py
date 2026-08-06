@@ -177,6 +177,7 @@ def normalize_listing(raw: dict) -> dict:
         "address": addr.get("full"),
         "city": addr.get("city"),
         "state": addr.get("state"),
+        "postal_code": addr.get("postalCode"),
         "beds": prop.get("bedrooms"),
         "baths": (prop.get("bathsFull") or 0) + (prop.get("bathsHalf") or 0) * 0.5,
         "sqft": prop.get("area"),

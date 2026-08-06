@@ -64,11 +64,14 @@ mention accessibility; hoa_fee/property_type when they mention condos or
 low-maintenance living; year_built when they mention a construction-year
 range, "newer," "historic," or similar; lot_size when they mention a "big
 yard," "large lot," an acreage figure, or similar; style when they name or
-rule out an architectural style, e.g. "farmhouse" or "not a ranch") clearly
-supports it: true or false. Be honest — mark true only when the listing's
-actual text/data supports it, not because it seems plausible. If a
-requirement is never mentioned or contradicted, mark it false — do not give
-credit for silence.
+rule out an architectural style, e.g. "farmhouse" or "not a ranch";
+address/city/state/postal_code when they mention a specific street,
+neighborhood, city, or zip code — this matters even when the buyer never
+touched a separate city/location filter and is relying entirely on this
+freeform text) clearly supports it: true or false. Be honest — mark true
+only when the listing's actual text/data supports it, not because it seems
+plausible. If a requirement is never mentioned or contradicted, mark it
+false — do not give credit for silence.
 
 Step 3 — write one specific sentence explaining the requirements breakdown,
 referencing what was met and what wasn't.
@@ -92,6 +95,10 @@ def _build_listing_payload(listings_batch: list[dict]) -> list[dict]:
         {
             "mls_id": l["mls_id"],
             "price": l["price"],
+            "address": l.get("address"),
+            "city": l.get("city"),
+            "state": l.get("state"),
+            "postal_code": l.get("postal_code"),
             "beds": l["beds"],
             "baths": l["baths"],
             "sqft": l["sqft"],
