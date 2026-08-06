@@ -61,10 +61,11 @@ Step 2 — for each requirement, judge whether THIS listing's description (and
 structured fields — school_ratings when the buyer mentions schools/kids/
 family; stories and phrases like "no stairs" or "walk-in shower" when they
 mention accessibility; hoa_fee/property_type when they mention condos or
-low-maintenance living) clearly supports it: true or false. Be honest — mark
-true only when the listing's actual text/data supports it, not because it
-seems plausible. If a requirement is never mentioned or contradicted, mark it
-false — do not give credit for silence.
+low-maintenance living; year_built when they mention a construction-year
+range, "newer," "historic," or similar) clearly supports it: true or false. Be
+honest — mark true only when the listing's actual text/data supports it, not
+because it seems plausible. If a requirement is never mentioned or
+contradicted, mark it false — do not give credit for silence.
 
 Step 3 — write one specific sentence explaining the requirements breakdown,
 referencing what was met and what wasn't.
@@ -94,6 +95,7 @@ def _build_listing_payload(listings_batch: list[dict]) -> list[dict]:
             "stories": l.get("stories"),
             "property_type": l.get("property_type"),
             "hoa_fee": l.get("hoa_fee"),
+            "year_built": l.get("year_built"),
             "description": l["description"],
             "school_ratings": l.get("school_ratings"),
         }
@@ -197,6 +199,7 @@ def _score_batch_anthropic(user_preferences: str, listings_batch: list[dict], on
 
     client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
     user_message = f"Buyer wants: {user_preferences}\n\nListings:\n{json.dumps(_build_listing_payload(listings_batch), indent=2)}"
+    _log_raw_input("Anthropic", listings_batch, user_message)
 
     def call():
         # with_raw_response gives access to the actual HTTP headers (rate
@@ -263,6 +266,18 @@ def _log_raw_output(provider: str, listings_batch: list[dict], raw_text: str) ->
     print(f"[{provider} raw output] batch mls_ids={ids}:\n{raw_text}\n{'-' * 60}")
 
 
+def _log_raw_input(provider: str, listings_batch: list[dict], user_message: str) -> None:
+    """Same idea as _log_raw_output, but for what we actually SEND —
+    the buyer's preferences plus the exact JSON payload built by
+    _build_listing_payload() for this batch (SYSTEM_PROMPT itself isn't
+    repeated here since it's identical on every call; this is the part
+    that varies per batch and is what actually matters for debugging,
+    e.g. confirming a field like year_built genuinely made it into what
+    the model received, not just that it exists in our own data)."""
+    ids = [str(l.get("mls_id")) for l in listings_batch]
+    print(f"[{provider} raw input] batch mls_ids={ids}:\n{user_message}\n{'-' * 60}")
+
+
 def _humanize_openai_error(e) -> tuple[str, str]:
     """Returns (client_message, technical_detail) — same split as
     _humanize_anthropic_error. Extracts the real message from OpenAI's
@@ -305,6 +320,7 @@ def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_re
 
     client = OpenAI(api_key=settings.OPENAI_API_KEY)
     user_message = f"Buyer wants: {user_preferences}\n\nListings:\n{json.dumps(_build_listing_payload(listings_batch), indent=2)}"
+    _log_raw_input("OpenAI", listings_batch, user_message)
 
     def call():
         # No temperature by default — newer OpenAI models (gpt-5.6 and

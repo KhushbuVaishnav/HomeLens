@@ -41,8 +41,12 @@ const DEFAULT_FILTERS = {
   excludeRanch: false,
 };
 
-function MatchGauge({ score }) {
-  const tier = score >= 80 ? "high" : score >= 60 ? "mid" : "low";
+function MatchGauge({ score, isPartial }) {
+  // Partial-match cards always show amber for the score itself, regardless
+  // of the numeric tier — consistent with the card's amber left-border
+  // accent. Reuses the existing --mid tier classes (already amber) rather
+  // than adding a redundant duplicate color.
+  const tier = isPartial ? "mid" : score >= 80 ? "high" : score >= 60 ? "mid" : "low";
   const scoreClass = tier === "high" ? "match-gauge__score--high" : tier === "mid" ? "match-gauge__score--mid" : "";
   const fillClass = tier === "high" ? "match-gauge__fill--high" : tier === "mid" ? "match-gauge__fill--mid" : "";
 
@@ -74,7 +78,7 @@ function ResultCard({ listing, isPartial }) {
   return (
     <div className={`result-card${isPartial ? " result-card--partial" : ""}`}>
       {hasMatchData ? (
-        <MatchGauge score={listing.match_score} />
+        <MatchGauge score={listing.match_score} isPartial={isPartial} />
       ) : (
         <div className="match-gauge match-gauge--empty">
           <span className="match-gauge__no-score">—</span>
@@ -661,41 +665,48 @@ function App() {
             // before seeing any results doesn't make sense; showing both
             // tiers transparently and letting them judge does.
             //
-            // Rendered as two side-by-side columns rather than one long
-            // stacked list — with many results, scrolling through every
+            // Rendered as two side-by-side columns when both categories
+            // have results — with many results, scrolling through every
             // full match just to reach the first partial one (or vice
-            // versa) got tedious. Both columns populate progressively as
-            // results stream in, same as before, just laid out side by
-            // side instead of head-to-tail.
+            // versa) got tedious. But if only ONE category currently has
+            // anything (common early in a search, or for a very specific
+            // preference that only matches one way), a two-column split
+            // wastes half the width on an empty placeholder — a single
+            // full-width panel reads more clearly in that case. This is
+            // evaluated live, so the layout can shift from one wide panel
+            // to two columns the moment the first result of the other
+            // category actually arrives — a natural consequence of
+            // genuinely progressive results, not a bug.
             const fullMatches = results.filter((l) => l.requirements_total === 0 || l.requirements_met === l.requirements_total);
             const partialMatches = results.filter((l) => l.requirements_total > 0 && l.requirements_met < l.requirements_total);
 
+            const fullPanel = (
+              <div>
+                <h3 className="results-subheading">Full matches — every requirement met ({fullMatches.length})</h3>
+                <div className="result-grid">
+                  {fullMatches.map((listing) => (
+                    <ResultCard key={listing.mls_id} listing={listing} />
+                  ))}
+                </div>
+              </div>
+            );
+            const partialPanel = (
+              <div>
+                <h3 className="results-subheading results-subheading--partial">Partial matches — missing at least one requirement ({partialMatches.length})</h3>
+                <div className="result-grid">
+                  {partialMatches.map((listing) => (
+                    <ResultCard key={listing.mls_id} listing={listing} isPartial />
+                  ))}
+                </div>
+              </div>
+            );
+
+            if (fullMatches.length > 0 && partialMatches.length === 0) return fullPanel;
+            if (partialMatches.length > 0 && fullMatches.length === 0) return partialPanel;
             return (
               <div className="results-columns">
-                <div>
-                  <h3 className="results-subheading">Full matches — every requirement met ({fullMatches.length})</h3>
-                  {fullMatches.length > 0 ? (
-                    <div className="result-grid">
-                      {fullMatches.map((listing) => (
-                        <ResultCard key={listing.mls_id} listing={listing} />
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="results-column__empty">None yet.</p>
-                  )}
-                </div>
-                <div>
-                  <h3 className="results-subheading results-subheading--partial">Partial matches — missing at least one requirement ({partialMatches.length})</h3>
-                  {partialMatches.length > 0 ? (
-                    <div className="result-grid">
-                      {partialMatches.map((listing) => (
-                        <ResultCard key={listing.mls_id} listing={listing} isPartial />
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="results-column__empty">None yet.</p>
-                  )}
-                </div>
+                {fullPanel}
+                {partialPanel}
               </div>
             );
           })()}
