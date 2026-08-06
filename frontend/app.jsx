@@ -64,7 +64,7 @@ function MatchGauge({ score }) {
   );
 }
 
-function ResultCard({ listing }) {
+function ResultCard({ listing, isPartial }) {
   const [expanded, setExpanded] = useState(false);
   const price = listing.price
     ? `$${listing.price.toLocaleString()}`
@@ -72,7 +72,7 @@ function ResultCard({ listing }) {
   const hasMatchData = typeof listing.match_score === "number";
 
   return (
-    <div className="result-card">
+    <div className={`result-card${isPartial ? " result-card--partial" : ""}`}>
       {hasMatchData ? (
         <MatchGauge score={listing.match_score} />
       ) : (
@@ -660,32 +660,43 @@ function App() {
             // someone to pre-declare "it's fine if you ignore requirement X"
             // before seeing any results doesn't make sense; showing both
             // tiers transparently and letting them judge does.
+            //
+            // Rendered as two side-by-side columns rather than one long
+            // stacked list — with many results, scrolling through every
+            // full match just to reach the first partial one (or vice
+            // versa) got tedious. Both columns populate progressively as
+            // results stream in, same as before, just laid out side by
+            // side instead of head-to-tail.
             const fullMatches = results.filter((l) => l.requirements_total === 0 || l.requirements_met === l.requirements_total);
             const partialMatches = results.filter((l) => l.requirements_total > 0 && l.requirements_met < l.requirements_total);
 
             return (
-              <React.Fragment>
-                {fullMatches.length > 0 && (
-                  <React.Fragment>
-                    <h3 className="results-subheading">Full matches — every requirement met ({fullMatches.length})</h3>
+              <div className="results-columns">
+                <div>
+                  <h3 className="results-subheading">Full matches — every requirement met ({fullMatches.length})</h3>
+                  {fullMatches.length > 0 ? (
                     <div className="result-grid">
                       {fullMatches.map((listing) => (
                         <ResultCard key={listing.mls_id} listing={listing} />
                       ))}
                     </div>
-                  </React.Fragment>
-                )}
-                {partialMatches.length > 0 && (
-                  <React.Fragment>
-                    <h3 className="results-subheading results-subheading--partial">Partial matches — missing at least one requirement ({partialMatches.length})</h3>
+                  ) : (
+                    <p className="results-column__empty">None yet.</p>
+                  )}
+                </div>
+                <div>
+                  <h3 className="results-subheading results-subheading--partial">Partial matches — missing at least one requirement ({partialMatches.length})</h3>
+                  {partialMatches.length > 0 ? (
                     <div className="result-grid">
                       {partialMatches.map((listing) => (
-                        <ResultCard key={listing.mls_id} listing={listing} />
+                        <ResultCard key={listing.mls_id} listing={listing} isPartial />
                       ))}
                     </div>
-                  </React.Fragment>
-                )}
-              </React.Fragment>
+                  ) : (
+                    <p className="results-column__empty">None yet.</p>
+                  )}
+                </div>
+              </div>
             );
           })()}
         </section>
