@@ -21,6 +21,16 @@ const DATA_SOURCE_LABELS = {
   generated: "Generated Data",
 };
 
+// POC scope note only — the static sources are small, fixed datasets
+// covering exactly these cities (verified directly against the actual
+// data files, not assumed). "live" is a real third-party sandbox API and
+// isn't a fixed list — its coverage can change independently of this app.
+const DATA_SOURCE_CITIES = {
+  generated: "Redwood City",
+  realistic: "Redwood City",
+  sample: "Houston",
+};
+
 const AI_PROVIDER_LABELS = {
   anthropic: "Claude",
   openai: "OpenAI",
@@ -159,7 +169,8 @@ function ResultCard({ listing, isPartial }) {
 function App() {
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [preferences, setPreferences] = useState("");
-  const [skipAI, setSkipAI] = useState(false);
+  const [searchMode, setSearchMode] = useState("ai_assisted"); // traditional | ai_assisted | nlp_only
+  const skipAI = searchMode === "traditional";
   const [status, setStatus] = useState("idle"); // idle | loading | error | done
   const [errorMessage, setErrorMessage] = useState("");
   const [validationError, setValidationError] = useState(""); // client-side form issues — never touches status/results
@@ -218,7 +229,6 @@ function App() {
     jobIdRef.current = null;
     setFilters(DEFAULT_FILTERS);
     setPreferences("");
-    setSkipAI(false);
     setStatus("idle");
     setErrorMessage("");
     setValidationError("");
@@ -232,7 +242,7 @@ function App() {
     e.preventDefault();
 
     if (!skipAI && !preferences.trim()) {
-      setValidationError("Describe what you're looking for — even a few phrases helps the matching. Or check \"Browse all\" to skip AI matching entirely.");
+      setValidationError("Describe what you're looking for — even a few phrases helps the matching. Or switch to Traditional mode above to search with filters only, no AI.");
       return;
     }
     setValidationError("");
@@ -248,7 +258,17 @@ function App() {
     abortControllerRef.current = controller;
     jobIdRef.current = null;
 
-    const filterBody = {
+    // In AI-only mode, the filter fields are hidden but filters state still
+    // holds its defaults underneath (e.g. cities: "Redwood City") — without
+    // this override, that stale default would silently still apply as a
+    // hard filter, breaking the promise that this mode uses NO hard
+    // filters at all, purely natural language.
+    const filterBody = searchMode === "nlp_only" ? {
+      cities: null, min_price: null, max_price: null, min_beds: null, min_baths: null,
+      min_sqft: null, min_school_rating: null, strict_school_rating: null,
+      property_types: null, max_hoa: null, min_stories: null, max_stories: null,
+      exclude_styles: null, data_source: selectedDataSource,
+    } : {
       cities: filters.cities ? filters.cities.split(",").map((c) => c.trim()).filter(Boolean) : null,
       min_price: numOrNull(filters.minPrice),
       max_price: numOrNull(filters.maxPrice),
@@ -366,6 +386,8 @@ function App() {
                   className="title-block__select"
                   value={selectedAiProvider || ""}
                   onChange={(e) => setSelectedAiProvider(e.target.value)}
+                  disabled={skipAI}
+                  title={skipAI ? "Not used in Traditional mode" : undefined}
                 >
                   {backendMeta.available_ai_providers.map((p) => (
                     <option key={p} value={p}>{AI_PROVIDER_LABELS[p] || p}</option>
@@ -377,11 +399,51 @@ function App() {
         </div>
       </header>
 
+      {selectedDataSource && DATA_SOURCE_CITIES[selectedDataSource] && (
+        <p className="poc-note">
+          POC scope: this dataset only contains listings for <strong>{DATA_SOURCE_CITIES[selectedDataSource]}</strong>.
+        </p>
+      )}
+
       <div className="layout">
         <form className="spec-panel" onSubmit={handleSubmit}>
           <p className="spec-panel__label">Search criteria</p>
           <h2 className="spec-panel__title">What are you looking for?</h2>
 
+          <div className="mode-selector" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={searchMode === "traditional"}
+              className={`mode-selector__option${searchMode === "traditional" ? " mode-selector__option--active" : ""}`}
+              onClick={() => setSearchMode("traditional")}
+            >
+              Traditional
+              <span className="mode-selector__hint">Filters only, no AI</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={searchMode === "ai_assisted"}
+              className={`mode-selector__option${searchMode === "ai_assisted" ? " mode-selector__option--active" : ""}`}
+              onClick={() => setSearchMode("ai_assisted")}
+            >
+              Filters + AI
+              <span className="mode-selector__hint">Narrow, then let AI match</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={searchMode === "nlp_only"}
+              className={`mode-selector__option${searchMode === "nlp_only" ? " mode-selector__option--active" : ""}`}
+              onClick={() => setSearchMode("nlp_only")}
+            >
+              AI only
+              <span className="mode-selector__hint">Just describe it</span>
+            </button>
+          </div>
+
+          {searchMode !== "nlp_only" && (
           <div className="field-group">
             <div className="field field--full">
               <label htmlFor="cities">City</label>
@@ -526,36 +588,28 @@ function App() {
                 Exclude ranch-style homes
               </label>
             </div>
-
-            <div className="field field--full field--checkbox">
-              <label htmlFor="skipAI" className="checkbox-label">
-                <input
-                  id="skipAI"
-                  type="checkbox"
-                  checked={skipAI}
-                  onChange={(e) => setSkipAI(e.target.checked)}
-                />
-                Browse all (skip AI) — just apply filters, no matching or scoring
-              </label>
-            </div>
-
-            <div className="field field--full">
-              <label htmlFor="preferences">Describe the home you actually want</label>
-              <textarea
-                id="preferences"
-                value={preferences}
-                onChange={(e) => {
-                  setPreferences(e.target.value);
-                  if (validationError) setValidationError(""); // clear as soon as they start fixing it
-                }}
-                placeholder={skipAI ? "Not used in Browse all mode" : "Quiet street, updated kitchen, a spare room for a home office, not near a busy road..."}
-                disabled={skipAI}
-              />
-              {validationError && (
-                <p className="field__hint field__hint--warn">{validationError}</p>
-              )}
-            </div>
           </div>
+          )}
+
+          {searchMode !== "traditional" && (
+            <div className="field-group">
+              <div className="field field--full">
+                <label htmlFor="preferences">Describe the home you actually want</label>
+                <textarea
+                  id="preferences"
+                  value={preferences}
+                  onChange={(e) => {
+                    setPreferences(e.target.value);
+                    if (validationError) setValidationError(""); // clear as soon as they start fixing it
+                  }}
+                  placeholder="Quiet street, updated kitchen, a spare room for a home office, not near a busy road..."
+                />
+                {validationError && (
+                  <p className="field__hint field__hint--warn">{validationError}</p>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="button-row">
             <button type="submit" className="submit-btn" disabled={status === "loading"}>
@@ -600,8 +654,11 @@ function App() {
             <div className="state-panel">
               <p className="state-panel__title">No search run yet</p>
               <p className="state-panel__body">
-                Fill in your criteria and describe what you're actually looking for — the AI reads each listing's
-                description, not just its specs, to find real fits.
+                {searchMode === "traditional"
+                  ? "Set your filters and click Find my matches — straightforward search, no AI involved."
+                  : searchMode === "nlp_only"
+                  ? "Just describe what you're looking for below — no filters needed. The AI reads each listing's full description to find real fits."
+                  : "Fill in your criteria and describe what you're actually looking for — the AI reads each listing's description, not just its specs, to find real fits."}
               </p>
             </div>
           )}

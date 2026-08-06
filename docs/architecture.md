@@ -1,20 +1,19 @@
 # Real Estate Matcher — SQLite Variant — Architecture Document
 
-**Scope:** this document covers the SQLite variant of the project — identical
-to the main app except school ratings are stored in a real SQLite database
-(`app/data/schools.db`) instead of `schools.json`. Covers the `generated`
-data source (500+ synthetic listings) specifically.
+**Scope:** covers the SQLite variant — school ratings in a real SQLite
+database (`app/data/schools.db`) instead of `schools.json` — against the
+`generated` data source (500+ synthetic listings, all in Redwood City).
 
-Diagrams are [Mermaid](https://mermaid.js.org) — they render natively when
-this file is viewed on GitHub, GitLab, and most modern markdown viewers.
-Standalone `.mmd` source files are also in `mermaid/` if you want to drop
-one into the [Mermaid Live Editor](https://mermaid.live) directly.
+**Reflects the 3-mode search UI**: the frontend now offers three distinct,
+explicit search modes instead of one combined form with a "skip AI"
+checkbox:
+- **Traditional** — hard filters only, zero AI involvement
+- **Filters + AI** — hard filters narrow the pool, then AI scores what's left
+- **AI only** — pure natural language, zero hard filters
 
-**Only two views actually changed** from the main project's architecture
-doc — Logical View and Physical View, both reflecting the schools.json →
-schools.db swap. Use-Case View, the Sequence Diagram, and Security View are
-identical, since none of them depend on how school data happens to be
-stored.
+Diagrams are [Mermaid](https://mermaid.js.org) — render natively on GitHub,
+GitLab, and most modern markdown viewers. Standalone `.mmd` files are in
+`mermaid/` for [mermaid.live](https://mermaid.live).
 
 ---
 
@@ -27,42 +26,41 @@ flowchart LR
     OpenAI([GPT<br/>OpenAI API])
 
     subgraph System["Real Estate Matcher — generated dataset, 500+ listings"]
-        UC1(Browse with hard filters<br/>price, beds, baths, sqft,<br/>HOA, stories, style, schools)
-        UC2(Search with AI matching<br/>freeform preferences)
-        UC3(Cancel an in-progress<br/>AI search)
-        UC4(Select AI provider)
-        UC5(Verify a match<br/>inspect raw listing text)
-        UC6(Score a listing against<br/>buyer's preferences)
+        UC1(Traditional search<br/>filters only, zero AI)
+        UC2(Filters + AI search<br/>hard filters narrow the pool,<br/>then AI scores what's left)
+        UC3(AI-only search<br/>pure natural language,<br/>zero hard filters)
+        UC4(Cancel an in-progress<br/>AI search)
+        UC5(Select AI provider)
+        UC6(Verify a match<br/>inspect raw listing text)
+        UC7(Score a listing against<br/>buyer's preferences)
     end
 
     Buyer --> UC1
     Buyer --> UC2
     Buyer --> UC3
-    Buyer --> UC4
-    Buyer --> UC5
+    Buyer --> UC6
 
-    UC2 -. include .-> UC6
-    UC3 -. extend .-> UC2
-    UC4 -. extend .-> UC6
+    UC2 -. include .-> UC7
+    UC3 -. include .-> UC7
+    UC4 -. extend .-> UC2
+    UC4 -. extend .-> UC3
+    UC5 -. extend .-> UC7
 
-    UC6 --> Claude
-    UC6 --> OpenAI
+    UC7 --> Claude
+    UC7 --> OpenAI
 ```
+
+**UC1 (Traditional) has no relationship to UC4 (Cancel)** — deliberately.
+Traditional mode is a single, quick synchronous request with no background
+job to cancel; only the two AI-using modes run as cancellable jobs.
 
 ---
 
 ## 2. Logical View
 
-**The change from the main project:** `schools_service.py` is SQLite-backed
-— it runs real SQL queries against `schools.db` instead of parsing
-`schools.json` into memory on every startup. Everything else calling it
-(`listings_service.py`, and transitively the routers) is unchanged — the
-public interface (`lookup_school()`, `attach_school_ratings()`) is
-identical either way.
-
 ```mermaid
 flowchart TD
-    Frontend["app.jsx<br/>React SPA, static"]
+    Frontend["app.jsx<br/>React SPA, static<br/>3 modes: Traditional / Filters+AI / AI-only"]
     Main["main.py<br/>assembly"]
     ListingsRouter["listings.py<br/>router"]
     MatchRouter["match.py<br/>router"]
@@ -74,8 +72,8 @@ flowchart TD
     Anthropic{{"Anthropic API"}}
     OpenAI{{"OpenAI API"}}
 
-    Frontend --> ListingsRouter
-    Frontend --> MatchRouter
+    Frontend -->|Traditional mode| ListingsRouter
+    Frontend -->|"Filters+AI or AI-only mode"| MatchRouter
     Main -. includes .-> ListingsRouter
     Main -. includes .-> MatchRouter
     ListingsRouter --> ListingsService
@@ -88,13 +86,15 @@ flowchart TD
     MatchingService --> OpenAI
 ```
 
+**The component graph itself didn't change for the 3-mode UI** — the
+backend already supported filter-free search (every `HardFilters` field
+defaults to `None`); the new UI just exposes that capability clearly
+instead of burying it behind a checkbox. Both AI-using modes route through
+the same `MatchRouter`, differing only in which filter values get sent.
+
 ---
 
 ## 3. Physical View
-
-**The change:** `schools.db` replaces `schools.json` as a physical file on
-disk. It's built once by `scripts/seed_schools_db.py` and committed to the
-repo — nothing writes to it at runtime.
 
 ```mermaid
 flowchart TD
@@ -116,25 +116,15 @@ flowchart TD
     Backend -->|"HTTPS + key"| OpenAICloud
 ```
 
-**Why `schools.db` is safe on hosts with an ephemeral filesystem** (e.g.
-Render's free tier, which wipes local file changes on every redeploy,
-restart, or spin-down): it's **read-only at runtime**. Nothing in the app
-ever writes to it after `seed_schools_db.py` builds it — it's committed to
-the repo and rebuilt fresh on every deploy, the same way
-`generated_listings.json` already is. This is a fundamentally different
-situation from a runtime cache or search history, which *would* break on
-this kind of host — see the main project's deployment notes for why that
-distinction mattered when we considered and rejected a caching feature
-earlier.
+Unaffected by the 3-mode UI — same routes already covered every mode's
+actual traffic.
 
 ---
 
-## 4. Sequence Diagram — AI-Matching a Search
+## 4a. Sequence Diagram — Filters + AI / AI-only Search
 
-Unchanged from the main project — school rating lookups happen inside
-`listings_service.py`'s `filter_by_school_rating()` step, which internally
-now hits SQLite instead of JSON, but the request/response flow at this
-level of detail is identical either way.
+Both AI-using modes share this exact flow — they differ only in which
+filter values are sent (AI-only always sends every filter as `null`).
 
 ```mermaid
 sequenceDiagram
@@ -182,12 +172,33 @@ sequenceDiagram
     FE-->>Buyer: render result cards
 ```
 
+## 4b. Sequence Diagram — Traditional Search
+
+Genuinely different flow — synchronous, no background job, no AI provider
+contacted at all.
+
+```mermaid
+sequenceDiagram
+    actor Buyer
+    participant FE as Frontend
+    participant Router as ListingsRouter
+    participant LS as listings_service
+
+    Buyer->>FE: Set filters, click "Find my matches"<br/>(Traditional mode — no preferences text shown)
+    FE->>Router: POST /listings
+    activate Router
+    Router->>LS: build_hard_filters(), fetch_listings(),<br/>normalize_listing(), filter_by_school_rating()
+    LS-->>Router: filtered listings
+    Router-->>FE: listings[] (no match_score, no AI reasoning)
+    deactivate Router
+    FE-->>Buyer: render result cards<br/>(single list, no Full/Partial split — no score to split by)
+
+    Note over FE,Router: One request, one response — no job_id,<br/>no polling loop, no AI provider ever contacted.<br/>This is the entire flow for Traditional mode.
+```
+
 ---
 
 ## 5. Security View
-
-Unchanged from the main project — this variant doesn't touch
-authentication, CORS, secrets handling, or input validation at all.
 
 ```mermaid
 flowchart LR
@@ -211,8 +222,8 @@ flowchart LR
     API --> Validators
     API --> Secrets
     API --> Jobs
-    API -->|"HTTPS + key"| Anthropic
-    API -->|"HTTPS + key"| OpenAI
+    API -->|"HTTPS + key<br/>(Filters+AI / AI-only modes only)"| Anthropic
+    API -->|"HTTPS + key<br/>(Filters+AI / AI-only modes only)"| OpenAI
 
     style Untrusted fill:#2a0f0f,stroke:#CC0000,stroke-width:2px
     style Trusted fill:#0f2412,stroke:#007700,stroke-width:2px
@@ -221,9 +232,13 @@ flowchart LR
 
 ### Security findings, in plain writing
 
-Identical to the main project's — see there for the full table. One
-addition specific to this variant:
-
-| # | Finding | Current state |
-|---|---|---|
-| 7 | **`schools.db` is committed to the repo** | Same as `generated_listings.json` — synthetic, non-sensitive reference data, safe to commit. No secrets or real data stored in it. |
+| # | Finding | Current state | Real risk if deployed publicly, unaddressed |
+|---|---|---|---|
+| 1 | **No authentication on any endpoint** | Confirmed — zero auth code anywhere in `app/routers/` | Anyone reaching the port can trigger real AI API costs, or poll/cancel any job by guessing its UUID |
+| 2 | **CORS defaults to `*`** | `CORS_ALLOW_ORIGINS` defaults to wildcard in `config.py` | Any website's JS could call this API from a visitor's browser |
+| 3 | **A secret in frontend code is not a real barrier** | N/A — general principle | Anyone can view it via browser DevTools and replay requests directly, bypassing the UI entirely |
+| 4 | **Secrets handling** | `.env` gitignored, never returned in responses, never logged (only usage counts) | Verified correct |
+| 5 | **Input validation** | Every field validated by Pydantic (type, enum membership) | Verified correct — invalid input gets a clean 422 |
+| 6 | **Data sensitivity** | Entirely synthetic — fictional addresses, fictional school names/ratings | No real PII or real-world claims at risk |
+| 7 | **`schools.db` is committed to the repo** | Same as `generated_listings.json` — synthetic, non-sensitive reference data, safe to commit | No secrets or real data stored in it |
+| 8 | **Traditional mode has a stronger privacy profile** | Never contacts Anthropic or OpenAI at all — confirmed structurally, not just by convention (`ListingsRouter` never imports `matching_service`) | A buyer using Traditional mode has a real, verifiable guarantee that their search criteria never leaves the server to a third party |
