@@ -378,6 +378,11 @@ function App() {
                   ))}
                 </select>
               ) : "connecting..."}
+              {selectedDataSource && DATA_SOURCE_CITIES[selectedDataSource] && (
+                <span className="title-block__scope-note">
+                  — POC, {DATA_SOURCE_CITIES[selectedDataSource]} only
+                </span>
+              )}
             </span>
             <span className="title-block__control">
               <strong>Matched by</strong>
@@ -398,12 +403,6 @@ function App() {
           </div>
         </div>
       </header>
-
-      {selectedDataSource && DATA_SOURCE_CITIES[selectedDataSource] && (
-        <p className="poc-note">
-          POC scope: this dataset only contains listings for <strong>{DATA_SOURCE_CITIES[selectedDataSource]}</strong>.
-        </p>
-      )}
 
       <div className="layout">
         <form className="spec-panel" onSubmit={handleSubmit}>
@@ -461,6 +460,9 @@ function App() {
               <input
                 id="minPrice"
                 type="number"
+                min="0"
+                max="100000000"
+                step="1000"
                 value={filters.minPrice}
                 onChange={(e) => updateField("minPrice", e.target.value)}
                 placeholder="No min"
@@ -471,6 +473,9 @@ function App() {
               <input
                 id="maxPrice"
                 type="number"
+                min="0"
+                max="100000000"
+                step="1000"
                 value={filters.maxPrice}
                 onChange={(e) => updateField("maxPrice", e.target.value)}
                 placeholder="No max"
@@ -482,6 +487,9 @@ function App() {
               <input
                 id="minBeds"
                 type="number"
+                min="0"
+                max="20"
+                step="1"
                 value={filters.minBeds}
                 onChange={(e) => updateField("minBeds", e.target.value)}
                 placeholder="Any"
@@ -492,6 +500,9 @@ function App() {
               <input
                 id="minBaths"
                 type="number"
+                min="0"
+                max="20"
+                step="0.5"
                 value={filters.minBaths}
                 onChange={(e) => updateField("minBaths", e.target.value)}
                 placeholder="Any"
@@ -503,6 +514,9 @@ function App() {
               <input
                 id="minSqft"
                 type="number"
+                min="0"
+                max="50000"
+                step="50"
                 value={filters.minSqft}
                 onChange={(e) => updateField("minSqft", e.target.value)}
                 placeholder="Any"
@@ -516,6 +530,7 @@ function App() {
                 type="number"
                 min="1"
                 max="10"
+                step="1"
                 value={filters.minSchoolRating}
                 onChange={(e) => updateField("minSchoolRating", e.target.value)}
                 placeholder={schoolDataSupported ? "Any" : "Not available for this data source"}
@@ -558,6 +573,9 @@ function App() {
               <input
                 id="maxHoa"
                 type="number"
+                min="0"
+                max="20000"
+                step="10"
                 value={filters.maxHoa}
                 onChange={(e) => updateField("maxHoa", e.target.value)}
                 placeholder="Any"
