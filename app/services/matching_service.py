@@ -14,6 +14,31 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from app.config import settings, VALID_AI_PROVIDERS
 
+
+class MatchingError(Exception):
+    """Carries two completely separate messages on purpose: `client_message`
+    (calm, jargon-free, safe to show to a real end user — never mentions
+    env vars, SDK exception types, providers, or raw API payloads) and
+    `technical_detail` (everything a developer needs, logged server-side
+    only via print(), never sent to the browser). Every place in this file
+    that used to raise a plain RuntimeError with a developer-facing string
+    raises this instead, so the two audiences are never conflated into one
+    message that serves neither well."""
+    def __init__(self, client_message: str, technical_detail: str):
+        self.client_message = client_message
+        self.technical_detail = technical_detail
+        super().__init__(technical_detail)
+
+
+# Standard client-facing messages, one per category of failure. Deliberately
+# generic and identical regardless of which provider or exact cause — a real
+# user doesn't need to know it was OpenAI vs Anthropic, a rate limit vs an
+# auth failure; they need to know whether trying again might help.
+_CLIENT_MSG_TRANSIENT = "We're having trouble reaching the AI service right now. Please try again in a moment."
+_CLIENT_MSG_CONFIG = "Something isn't configured correctly on our end. Please try again later."
+_CLIENT_MSG_TOO_LARGE = "That search returned more than we could process. Try narrowing your filters."
+_CLIENT_MSG_UNKNOWN = "Something unexpected happened. Please try again."
+
 SYSTEM_PROMPT = """You are a real estate matching assistant. You will be given:
 1. A buyer's freeform description of what they want in a home.
 2. A batch of listings, each with an id, basic specs (including stories,
@@ -144,13 +169,30 @@ def _log_rate_limit_headers(provider: str, headers) -> None:
     )
 
 
+def _humanize_anthropic_error(e) -> tuple[str, str]:
+    """Returns (client_message, technical_detail). Extracts the actual
+    message instead of the raw exception object for the technical side, and
+    picks the right client-facing category based on the specific error —
+    e.g. a context-length error is genuinely something the user can act on
+    (narrow the search), unlike most other API errors."""
+    body = getattr(e, "body", None)
+    error_info = body.get("error", {}) if isinstance(body, dict) else {}
+    message = error_info.get("message") or str(e)
+    error_type = error_info.get("type", "")
+    technical = f"Anthropic API error ({e.status_code}): {message}"
+
+    if "context" in error_type.lower() or "too long" in message.lower() or "maximum" in message.lower():
+        return _CLIENT_MSG_TOO_LARGE, technical
+    return _CLIENT_MSG_CONFIG, technical
+
+
 def _score_batch_anthropic(user_preferences: str, listings_batch: list[dict], on_retry=None) -> list[dict]:
     import anthropic
 
     if not settings.ANTHROPIC_API_KEY:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set — required to use Claude as the AI provider. "
-            "Add it to .env, or select a different provider."
+        raise MatchingError(
+            _CLIENT_MSG_CONFIG,
+            "ANTHROPIC_API_KEY is not set — required to use Claude as the AI provider. Add it to .env, or select a different provider.",
         )
 
     client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -174,21 +216,27 @@ def _score_batch_anthropic(user_preferences: str, listings_batch: list[dict], on
     try:
         response = _retry_with_backoff(call, on_retry=on_retry)
     except anthropic.RateLimitError as e:
-        raise RuntimeError(
+        raise MatchingError(
+            _CLIENT_MSG_TRANSIENT,
             "Anthropic rate limit hit repeatedly even after retrying — you're sending requests "
             "faster than your account's current limit allows. Try lowering MAX_CONCURRENT_BATCHES "
-            "in .env, or check your rate limits in the Anthropic Console."
+            "in .env, or check your rate limits in the Anthropic Console.",
         ) from e
     except anthropic.AuthenticationError as e:
-        raise RuntimeError(
-            "Anthropic authentication failed — check ANTHROPIC_API_KEY in .env and that billing is set up."
+        raise MatchingError(
+            _CLIENT_MSG_CONFIG,
+            "Anthropic authentication failed — check ANTHROPIC_API_KEY in .env and that billing is set up.",
         ) from e
     except anthropic.NotFoundError as e:
-        raise RuntimeError(f"Model '{settings.ANTHROPIC_MODEL}' not found or not available on your account.") from e
+        raise MatchingError(
+            _CLIENT_MSG_CONFIG,
+            f"Model '{settings.ANTHROPIC_MODEL}' not found or not available on your account.",
+        ) from e
     except anthropic.APIStatusError as e:
-        raise RuntimeError(f"Anthropic API error ({e.status_code}): {e.message}") from e
+        raise MatchingError(*_humanize_anthropic_error(e)) from e
 
     _log_token_usage("Anthropic", len(listings_batch), response.usage.input_tokens, response.usage.output_tokens)
+    _log_raw_output("Anthropic", listings_batch, response.content[0].text)
     return _parse_response_text(response.content[0].text)
 
 
@@ -204,14 +252,55 @@ def _log_token_usage(provider: str, batch_size: int, input_tokens: int, output_t
           f"total: {input_tokens + output_tokens} tokens")
 
 
+def _log_raw_output(provider: str, listings_batch: list[dict], raw_text: str) -> None:
+    """Prints the model's raw, unparsed response text — server-side only,
+    same principle as every other technical log in this file (never sent
+    to the browser). Useful for actually seeing what the model said,
+    e.g. while tuning the system prompt or debugging a parse failure.
+    Includes the batch's mls_ids so it's identifiable in a busy,
+    concurrent log with several batches' output interleaved."""
+    ids = [str(l.get("mls_id")) for l in listings_batch]
+    print(f"[{provider} raw output] batch mls_ids={ids}:\n{raw_text}\n{'-' * 60}")
+
+
+def _humanize_openai_error(e) -> tuple[str, str]:
+    """Returns (client_message, technical_detail) — same split as
+    _humanize_anthropic_error. Extracts the real message from OpenAI's
+    structured error body instead of dumping the whole raw exception
+    object, and picks the client-facing category based on what actually
+    went wrong (a context-length error is genuinely something the user
+    can act on; a config issue on our end isn't)."""
+    body = getattr(e, "body", None)
+    error_info = body.get("error", {}) if isinstance(body, dict) else {}
+    message = error_info.get("message") or str(e)
+    param = error_info.get("param")
+    code = error_info.get("code")
+
+    if param == "temperature" and code == "unsupported_value":
+        technical = (
+            f"OpenAI rejected the temperature setting: {message} "
+            f"Fix: set OPENAI_REASONING_EFFORT=none in .env — that's the one case OpenAI "
+            f"allows a custom temperature. With any other value (including unset), "
+            f"temperature is never sent and this error shouldn't occur — if you're seeing "
+            f"this with OPENAI_REASONING_EFFORT already set to something else, the running "
+            f"server likely hasn't picked up that .env change yet (restart uvicorn)."
+        )
+        return _CLIENT_MSG_CONFIG, technical
+
+    if code == "context_length_exceeded":
+        return _CLIENT_MSG_TOO_LARGE, f"OpenAI API error ({e.status_code}): {message}"
+
+    return _CLIENT_MSG_CONFIG, f"OpenAI API error ({e.status_code}): {message}"
+
+
 def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_retry=None) -> list[dict]:
     import openai
     from openai import OpenAI, AuthenticationError, NotFoundError, APIStatusError
 
     if not settings.OPENAI_API_KEY:
-        raise RuntimeError(
-            "OPENAI_API_KEY is not set — required to use OpenAI as the AI provider. "
-            "Add it to .env, or select a different provider."
+        raise MatchingError(
+            _CLIENT_MSG_CONFIG,
+            "OPENAI_API_KEY is not set — required to use OpenAI as the AI provider. Add it to .env, or select a different provider.",
         )
 
     client = OpenAI(api_key=settings.OPENAI_API_KEY)
@@ -247,21 +336,27 @@ def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_re
     try:
         response = _retry_with_backoff(call, on_retry=on_retry)
     except openai.RateLimitError as e:
-        raise RuntimeError(
+        raise MatchingError(
+            _CLIENT_MSG_TRANSIENT,
             "OpenAI rate limit hit repeatedly even after retrying — you're sending requests faster "
             "than your account's current limit allows. Try lowering MAX_CONCURRENT_BATCHES in .env, "
-            "or check your rate limits at platform.openai.com."
+            "or check your rate limits at platform.openai.com.",
         ) from e
     except AuthenticationError as e:
-        raise RuntimeError(
-            "OpenAI authentication failed — check OPENAI_API_KEY in .env and that billing is set up."
+        raise MatchingError(
+            _CLIENT_MSG_CONFIG,
+            "OpenAI authentication failed — check OPENAI_API_KEY in .env and that billing is set up.",
         ) from e
     except NotFoundError as e:
-        raise RuntimeError(f"Model '{settings.OPENAI_MODEL}' not found or not available on your account.") from e
+        raise MatchingError(
+            _CLIENT_MSG_CONFIG,
+            f"Model '{settings.OPENAI_MODEL}' not found or not available on your account.",
+        ) from e
     except APIStatusError as e:
-        raise RuntimeError(f"OpenAI API error ({e.status_code}): {e.message}") from e
+        raise MatchingError(*_humanize_openai_error(e)) from e
 
     _log_token_usage("OpenAI", len(listings_batch), response.usage.prompt_tokens, response.usage.completion_tokens)
+    _log_raw_output("OpenAI", listings_batch, response.choices[0].message.content)
     return _parse_response_text(response.choices[0].message.content)
 
 
@@ -383,9 +478,32 @@ _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 
 
+def _build_batches(listings: list[dict]) -> list[list[dict]]:
+    """Send a size-1 'warm-up' batch first, then the rest at normal
+    BATCH_SIZE. A single-listing batch has far less output to generate
+    than a full one, so it tends to come back fastest of everything in
+    flight — the goal is genuinely showing the user *something* as soon
+    as the first API response lands, not a blank screen with only a
+    progress count until a full batch completes. Only makes sense with
+    2+ listings; with exactly 1, there's nothing left to split further.
+
+    Pulled out as its own function specifically so start_match_job (which
+    needs the total batch COUNT immediately, before the background thread
+    even runs) and _run_job (which needs the actual batch CONTENTS) always
+    agree — they used to compute this separately, which drifted apart the
+    moment this warm-up logic was added to one but not the other, showing
+    a total_batches count in the UI that didn't match what was actually
+    running."""
+    if len(listings) > 1:
+        return [[listings[0]]] + [
+            listings[i:i + settings.BATCH_SIZE] for i in range(1, len(listings), settings.BATCH_SIZE)
+        ]
+    return [listings] if listings else []
+
+
 def start_match_job(user_preferences: str, listings: list[dict], ai_provider: str = None) -> str:
     job_id = str(uuid.uuid4())
-    total_batches = (len(listings) + settings.BATCH_SIZE - 1) // settings.BATCH_SIZE if listings else 0
+    total_batches = len(_build_batches(listings))
 
     job = {
         "status": "running",       # running | done | cancelled | error
@@ -419,7 +537,11 @@ def _run_job(job_id: str, user_preferences: str, listings: list[dict], ai_provid
     job = _jobs[job_id]
     cancel_event = job["cancel_event"]
     scores_by_id = {}
-    batches = [listings[i:i + settings.BATCH_SIZE] for i in range(0, len(listings), settings.BATCH_SIZE)]
+
+    # See _build_batches' docstring for why this is a shared helper, not
+    # computed inline here — it used to be, and drifted out of sync with
+    # start_match_job's separate calculation of the same thing.
+    batches = _build_batches(listings)
     batch_iter = iter(batches)
 
     def on_retry(attempt, delay):
@@ -477,20 +599,27 @@ def _run_job(job_id: str, user_preferences: str, listings: list[dict], ai_provid
                     submit_next()  # keep the window full, unless cancelled
 
         job["status"] = "cancelled" if cancel_event.is_set() else "done"
-    except Exception as e:
-        # Deliberately broad, not just RuntimeError — this is the last line
-        # of defense for a background thread. Anything raised in here
-        # (a missing API key, an SDK-specific exception type we didn't
-        # anticipate, whatever) MUST still flip the job to "error" status.
-        # Without this, an exception type we didn't explicitly catch would
-        # silently kill the thread while leaving job["status"] stuck at
-        # "running" forever — the frontend would then poll an endpoint that
-        # never changes, spinning indefinitely with no error shown at all.
-        # (This is exactly what happened before this fix: a missing
-        # OPENAI_API_KEY raised an OpenAI-SDK-specific exception, not a
-        # RuntimeError, so it slipped past the narrower except clause here.)
+    except MatchingError as e:
+        # The expected, categorized case — log full technical detail
+        # server-side only, store just the clean client-facing message in
+        # job["error"] (this is what the frontend actually displays via
+        # polling — see routers/match.py's get_match_status).
+        print(f"[job {job_id} error] {e.technical_detail}")
         job["status"] = "error"
-        job["error"] = str(e)
+        job["error"] = e.client_message
+    except Exception as e:
+        # Deliberately broad, not just MatchingError — this is the last
+        # line of defense for a background thread. Anything raised in here
+        # that we didn't anticipate MUST still flip the job to "error"
+        # status (see the long-standing comment history on this exact
+        # line for why: an uncaught exception type here used to silently
+        # kill the thread while job["status"] stayed "running" forever).
+        # The client still gets a clean, generic message — never str(e) —
+        # consistent with MatchingError above; the real detail goes to
+        # server logs only.
+        print(f"[job {job_id} error] unexpected exception type {type(e).__name__}: {e}")
+        job["status"] = "error"
+        job["error"] = _CLIENT_MSG_UNKNOWN
 
 
 def cancel_job(job_id: str) -> bool:

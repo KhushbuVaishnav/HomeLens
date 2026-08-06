@@ -48,13 +48,16 @@ def match_listings(request: MatchRequest):
 
     try:
         ranked = matching_service.rank_listings(request.preferences, listings, request.ai_provider)
-    except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    except matching_service.MatchingError as e:
+        print(f"[match error] {e.technical_detail}")  # full detail server-side only
+        raise HTTPException(status_code=502, detail=e.client_message)  # clean, jargon-free for the browser
     except Exception as e:
-        # Defense in depth, same reasoning as _run_job's broad except: don't
-        # let an unanticipated exception type turn into a generic, unhelpful
-        # 500 — surface it as a clear 502 with the real message instead.
-        raise HTTPException(status_code=502, detail=f"AI matching failed: {e}")
+        # Defense in depth, same reasoning as _run_job's broad except: an
+        # exception type we didn't anticipate should still resolve to a
+        # clean client-facing message, not whatever str(e) happens to be —
+        # same principle as MatchingError above, just for the unexpected case.
+        print(f"[match error] unexpected exception type {type(e).__name__}: {e}")
+        raise HTTPException(status_code=502, detail=matching_service._CLIENT_MSG_UNKNOWN)
 
     return {"count": len(ranked), "matches": ranked}
 

@@ -158,6 +158,7 @@ function App() {
   const [skipAI, setSkipAI] = useState(false);
   const [status, setStatus] = useState("idle"); // idle | loading | error | done
   const [errorMessage, setErrorMessage] = useState("");
+  const [validationError, setValidationError] = useState(""); // client-side form issues — never touches status/results
   const [results, setResults] = useState([]);
   const [progress, setProgress] = useState({ completed: 0, total: 0, inFlight: 0 });
   const [retryCount, setRetryCount] = useState(0);
@@ -216,6 +217,7 @@ function App() {
     setSkipAI(false);
     setStatus("idle");
     setErrorMessage("");
+    setValidationError("");
     setResults([]);
     setProgress({ completed: 0, total: 0, inFlight: 0 });
     setRetryCount(0);
@@ -226,10 +228,10 @@ function App() {
     e.preventDefault();
 
     if (!skipAI && !preferences.trim()) {
-      setStatus("error");
-      setErrorMessage("Describe what you're looking for — even a few phrases helps the matching. Or check \"Browse all\" to skip AI matching entirely.");
+      setValidationError("Describe what you're looking for — even a few phrases helps the matching. Or check \"Browse all\" to skip AI matching entirely.");
       return;
     }
+    setValidationError("");
 
     setStatus("loading");
     setErrorMessage("");
@@ -538,10 +540,16 @@ function App() {
               <textarea
                 id="preferences"
                 value={preferences}
-                onChange={(e) => setPreferences(e.target.value)}
+                onChange={(e) => {
+                  setPreferences(e.target.value);
+                  if (validationError) setValidationError(""); // clear as soon as they start fixing it
+                }}
                 placeholder={skipAI ? "Not used in Browse all mode" : "Quiet street, updated kitchen, a spare room for a home office, not near a busy road..."}
                 disabled={skipAI}
               />
+              {validationError && (
+                <p className="field__hint field__hint--warn">{validationError}</p>
+              )}
             </div>
           </div>
 
@@ -563,21 +571,26 @@ function App() {
               </button>
             )}
           </div>
-
-          {status === "error" && (
-            <div className="error-banner">{errorMessage}</div>
-          )}
         </form>
 
         <section>
-          <div className="results-header">
-            <h2 className="results-header__title">Matches</h2>
-            {results.length > 0 && (
-              <span className="results-header__count">
-                {results.length} listing{results.length === 1 ? "" : "s"}{status === "loading" ? " so far" : ""}
-              </span>
-            )}
-          </div>
+          {status === "error" && (
+            <div className="error-banner">
+              <p className="error-banner__title">Something went wrong</p>
+              <p className="error-banner__body">{errorMessage}</p>
+            </div>
+          )}
+
+          {status !== "error" && (
+            <div className="results-header">
+              <h2 className="results-header__title">Matches</h2>
+              {results.length > 0 && (
+                <span className="results-header__count">
+                  {results.length} listing{results.length === 1 ? "" : "s"}{status === "loading" ? " so far" : ""}
+                </span>
+              )}
+            </div>
+          )}
 
           {status === "idle" && (
             <div className="state-panel">
@@ -609,7 +622,9 @@ function App() {
 
           {status === "done" && wasCancelled && (
             <div className="cancelled-banner">
-              Search cancelled after {progress.completed} of {progress.total} batches — showing partial results from what was already scored.
+              {results.length > 0
+                ? `Search cancelled after ${progress.completed} of ${progress.total} batches — showing partial results from what was already scored.`
+                : `Search cancelled after ${progress.completed} of ${progress.total} batches — none of what was scored passed the match threshold.`}
             </div>
           )}
 
@@ -617,14 +632,16 @@ function App() {
             <div className="state-panel">
               <p className="state-panel__title">Nothing matched</p>
               <p className="state-panel__body">
-                {wasCancelled
+                {wasCancelled && progress.completed === 0
                   ? "Cancelled before any batch finished scoring — nothing to show yet."
+                  : wasCancelled
+                  ? `Cancelled after ${progress.completed} of ${progress.total} batches finished, but none of the listings scored above the match threshold.`
                   : "Try loosening your filters, or your city may have limited listings in the sandbox data."}
               </p>
             </div>
           )}
 
-          {results.length > 0 && (() => {
+          {status !== "error" && results.length > 0 && (() => {
             // Browse-all results have no requirements/score data at all —
             // just show them as one flat list in that case.
             const hasRequirementData = !skipAI && results.some((l) => typeof l.requirements_total === "number");
