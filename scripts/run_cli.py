@@ -34,7 +34,7 @@ def run(hard_filters: HardFilters, user_preferences: str):
 
 
 if __name__ == "__main__":
-    # No hardcoded city filter — sample/realistic/generated are Redwood-City-only
+    # No hardcoded city filter — realistic/generated are Redwood-City-only
     # anyway, and hardcoding it here would silently zero out results against
     # DATA_SOURCE=live, whose actual city has changed before (see README).
     filters = HardFilters()

@@ -15,10 +15,9 @@ function numOrNull(value) {
 }
 
 const DATA_SOURCE_LABELS = {
-  live: "SimplyRETS Sandbox",
-  sample: "Sample Data",
-  realistic: "Realistic Data",
-  generated: "Generated Data",
+  live: "SimplyRETS (Live)",
+  realistic: "Small Dataset (14 listings)",
+  generated: "Large Dataset (500+ listings)",
 };
 
 // POC scope note only — the static sources are small, fixed datasets
@@ -28,7 +27,27 @@ const DATA_SOURCE_LABELS = {
 const DATA_SOURCE_CITIES = {
   generated: "Redwood City",
   realistic: "Redwood City",
-  sample: "Houston",
+};
+
+// Separate from DATA_SOURCE_CITIES above on purpose — that one is only for
+// sources we've directly verified are fixed/guaranteed. This one just picks
+// a sensible starting value for the City field, including a best-effort
+// default for "live" (Houston, as of our last check) even though that
+// source isn't guaranteed to stay that way.
+const DATA_SOURCE_DEFAULT_CITY = {
+  generated: "Redwood City",
+  realistic: "Redwood City",
+  live: "Houston",
+};
+
+// Accurate per-source description — deliberately NOT one blanket "this is
+// all synthetic" statement, since that would be factually wrong for
+// "live": that source is real third-party data from SimplyRETS' public
+// sandbox API, not something created for this project at all.
+const DATA_SOURCE_NOTES = {
+  generated: "500+ synthetically generated listings for this project — not real property listings.",
+  realistic: "14 hand-written listings for this project — not real property listings.",
+  live: "This makes a real REST call to SimplyRETS' public Sandbox API — a demo environment we're using for this POC. Swap it for their production API and this same integration would return real, current listings. As of our last check, the Sandbox's listings were all in Houston, TX — but unlike our own fixed data, this is a live third-party feed and its coverage could change without any action on our part.",
 };
 
 const AI_PROVIDER_LABELS = {
@@ -151,6 +170,19 @@ function ResultCard({ listing, isPartial }) {
 
         {expanded && (
           <div className="result-card__expanded">
+            {listing.photos && listing.photos.length > 0 && (
+              <div className="result-card__photos">
+                {listing.photos.map((url, i) => (
+                  <img
+                    key={i}
+                    src={url}
+                    alt={`${listing.address || "Listing"} photo ${i + 1}`}
+                    className="result-card__photo"
+                    onError={(e) => { e.target.style.display = "none"; }}
+                  />
+                ))}
+              </div>
+            )}
             <p className="result-card__expanded-label">Full description (verify Claude's quote against this directly)</p>
             <p className="result-card__expanded-description">{listing.description || "No description available."}</p>
 
@@ -199,9 +231,23 @@ function App() {
       .catch(() => setBackendMeta(null)); // silently ignore — header just falls back to a generic label
   }, []);
 
+  // Keep the City field matching whichever source is active — e.g. a
+  // "Redwood City" search on live's Houston-only sandbox would just return
+  // zero results, so auto-correcting it when the source changes is more
+  // helpful than leaving a stale, wrong city sitting there. Safe to run on
+  // every change including the very first one (unlike the AI-model-reset
+  // effect elsewhere in this file) — there's no separate "correct initial
+  // value" to preserve here, the city should always just match the
+  // currently active source, from the first render onward.
+  useEffect(() => {
+    if (selectedDataSource && DATA_SOURCE_DEFAULT_CITY[selectedDataSource]) {
+      setFilters((prev) => ({ ...prev, cities: DATA_SOURCE_DEFAULT_CITY[selectedDataSource] }));
+    }
+  }, [selectedDataSource]);
+
   // Only "realistic" and "generated" data carry a schools field at all — "live"
-  // (SimplyRETS sandbox) and "sample" listings have none, so the school rating
-  // filter would silently do nothing on them. Disable the controls in that case
+  // (SimplyRETS sandbox) listings have none, so the school rating filter
+  // would silently do nothing on it. Disable the controls in that case
   // instead of letting someone set a value that's quietly ignored.
   const schoolDataSupported = selectedDataSource === null
     ? true // still connecting — assume supported so nothing flashes disabled-then-enabled
@@ -362,45 +408,57 @@ function App() {
     <React.Fragment>
       <header className="title-block">
         <div className="title-block__inner">
-          <div className="title-block__mark">HOME<span>MATCH</span></div>
+          <div className="title-block__brand">
+            <div className="title-block__mark">Home<span>Lens</span></div>
+            <p className="title-block__tagline">AI that sees homes through your lens!</p>
+          </div>
           <div className="title-block__meta">
-            <span><strong>Type</strong>Single-family &amp; Condo</span>
             <span className="title-block__control">
-              <strong>Source</strong>
-              {backendMeta ? (
-                <select
-                  className="title-block__select"
-                  value={selectedDataSource || ""}
-                  onChange={(e) => setSelectedDataSource(e.target.value)}
-                >
-                  {backendMeta.available_data_sources.map((s) => (
-                    <option key={s} value={s}>{DATA_SOURCE_LABELS[s] || s}</option>
-                  ))}
-                </select>
-              ) : "connecting..."}
-              {selectedDataSource && DATA_SOURCE_CITIES[selectedDataSource] && (
-                <span className="title-block__scope-note">
-                  — POC, {DATA_SOURCE_CITIES[selectedDataSource]} only
-                </span>
-              )}
+              <span className="title-block__control-hint">Any data source works for testing this POC.</span>
+              <span className="title-block__control-row">
+                <strong>Property Data</strong>
+                {backendMeta ? (
+                  <select
+                    className="title-block__select"
+                    value={selectedDataSource || ""}
+                    onChange={(e) => setSelectedDataSource(e.target.value)}
+                  >
+                    {backendMeta.available_data_sources.map((s) => (
+                      <option key={s} value={s}>{DATA_SOURCE_LABELS[s] || s}</option>
+                    ))}
+                  </select>
+                ) : "connecting..."}
+                {selectedDataSource && DATA_SOURCE_CITIES[selectedDataSource] && (
+                  <span className="title-block__scope-note">
+                    — POC, {DATA_SOURCE_CITIES[selectedDataSource]} only
+                  </span>
+                )}
+              </span>
             </span>
-            <span className="title-block__control">
-              <strong>Matched by</strong>
-              {backendMeta ? (
-                <select
-                  className="title-block__select"
-                  value={selectedAiProvider || ""}
-                  onChange={(e) => setSelectedAiProvider(e.target.value)}
-                  disabled={skipAI}
-                  title={skipAI ? "Not used in Traditional mode" : undefined}
-                >
-                  {backendMeta.available_ai_providers.map((p) => (
-                    <option key={p} value={p}>{AI_PROVIDER_LABELS[p] || p}</option>
-                  ))}
-                </select>
-              ) : "connecting..."}
+            <span className="title-block__control title-block__control--secondary">
+              <span className="title-block__control-row">
+                <strong>Matched by LLM Provider</strong>
+                {backendMeta ? (
+                  <select
+                    className="title-block__select"
+                    value={selectedAiProvider || ""}
+                    onChange={(e) => setSelectedAiProvider(e.target.value)}
+                    disabled={skipAI}
+                    title={skipAI ? "Not used in Traditional mode" : undefined}
+                  >
+                    {backendMeta.available_ai_providers.map((p) => (
+                      <option key={p} value={p}>{AI_PROVIDER_LABELS[p] || p}</option>
+                    ))}
+                  </select>
+                ) : "connecting..."}
+              </span>
             </span>
           </div>
+          {selectedDataSource && DATA_SOURCE_NOTES[selectedDataSource] && (
+            <p className="title-block__source-note">
+              {DATA_SOURCE_NOTES[selectedDataSource]}
+            </p>
+          )}
         </div>
       </header>
 

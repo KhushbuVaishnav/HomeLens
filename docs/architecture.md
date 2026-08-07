@@ -98,7 +98,7 @@ the same `MatchRouter`, differing only in which filter values get sent.
 
 ```mermaid
 flowchart TD
-    Browser["Browser<br/>HomeMatch SPA"]
+    Browser["Browser<br/>HomeLens SPA"]
     FrontendServer["Frontend static server<br/>python3 -m http.server :5500"]
     Backend["Backend server<br/>uvicorn app.main:app :8000"]
     GenFile[("generated_listings.json")]

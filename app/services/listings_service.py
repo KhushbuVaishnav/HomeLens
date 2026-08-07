@@ -65,8 +65,6 @@ def fetch_listings(filters: HardFilters, limit: int = None, data_source: str = N
         listings = _fetch_from_json(settings.GENERATED_DATA_PATH, filters, limit)
     elif source == "realistic":
         listings = _fetch_from_json(settings.REALISTIC_DATA_PATH, filters, limit)
-    elif source == "sample":
-        listings = _fetch_from_json(settings.SAMPLE_DATA_PATH, filters, limit)
     else:
         listings = _fetch_from_simplyrets(filters, limit)
 

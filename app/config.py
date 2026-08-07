@@ -9,7 +9,7 @@ to change which data source or AI provider is active, especially once this
 runs anywhere besides your laptop (staging, CI, a teammate's machine).
 
 Set these in your .env file:
-    DATA_SOURCE=generated        # one of: live, sample, realistic, generated
+    DATA_SOURCE=generated        # one of: live, realistic, generated
     AI_PROVIDER=anthropic        # one of: anthropic, openai
     SCORE_THRESHOLD=60           # 0-100
     BATCH_SIZE=8
@@ -28,19 +28,17 @@ DATA_DIR = BASE_DIR / "data"
 # Single source of truth for valid option values — imported by services and
 # routers that need to validate against these, instead of each defining its
 # own copy (which is how these can silently drift out of sync over time).
-VALID_DATA_SOURCES = ("live", "sample", "realistic", "generated")
+VALID_DATA_SOURCES = ("live", "realistic", "generated")
 VALID_AI_PROVIDERS = ("anthropic", "openai")
 
 
 class Settings:
     # --- Data source ---
     # "live"      -> real SimplyRETS sandbox API
-    # "sample"    -> app/data/sample_listings.json (small, hand-edited test set)
     # "realistic" -> app/data/realistic_listings.json (14 hand-written listings)
     # "generated" -> app/data/generated_listings.json (large generated set)
     DATA_SOURCE: str = os.environ.get("DATA_SOURCE", "generated").lower()
 
-    SAMPLE_DATA_PATH: Path = DATA_DIR / "sample_listings.json"
     REALISTIC_DATA_PATH: Path = DATA_DIR / "realistic_listings.json"
     GENERATED_DATA_PATH: Path = DATA_DIR / "generated_listings.json"
     SCHOOLS_PATH: Path = DATA_DIR / "schools.json"  # kept as the source data — see seed_schools_db.py

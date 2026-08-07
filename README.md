@@ -25,7 +25,7 @@ real-estate-matcher/
 │   │   ├── listings_service.py   # Fetch + filter logic, all data sources
 │   │   ├── matching_service.py   # AI scoring, Anthropic or OpenAI behind one switch
 │   │   └── schools_service.py    # School ratings lookup — SQLite-backed in this variant
-│   └── data/                  # generated/realistic/sample JSON + schools.json + schools.db
+│   └── data/                  # generated/realistic JSON + schools.json + schools.db
 ├── scripts/
 │   ├── generate_listings.py   # Regenerate the large synthetic dataset
 │   ├── analyze_scores.py      # See real AI score distributions (for tuning SCORE_THRESHOLD)
@@ -86,7 +86,7 @@ side by side.
 
 **Permanent default** — change `.env`:
 ```
-DATA_SOURCE=realistic     # or: live, sample, generated
+DATA_SOURCE=realistic     # or: live, generated
 AI_PROVIDER=openai        # or: anthropic
 ```
 Restart `uvicorn` (or let `--reload` pick it up) after changing `.env`. This
@@ -94,7 +94,7 @@ is what the header dropdowns default to on page load, and what any request
 uses if it doesn't specify an override.
 
 **One practical gotcha when switching to `live`:** the City filter defaults
-to "Redwood City" (correct for `sample`/`realistic`/`generated`, which are
+to "Redwood City" (correct for `realistic`/`generated`, which are
 our own fixed data), but `live` is SimplyRETS' real sandbox and its listings
 are in Houston, not Redwood City — clear or change the City field when
 testing `live`, or you'll get zero results for reasons that have nothing to
@@ -116,8 +116,6 @@ do with your other filters.
   curl -u simplyrets:simplyrets "https://api.simplyrets.com/properties?limit=5" \
     | python3 -c "import json,sys; d=json.load(sys.stdin); [print(l['address']['city']) for l in d]"
   ```
-- **`sample`** — a handful of listings you can hand-edit directly for quick,
-  controlled tests.
 - **`realistic`** — 14 hand-written Redwood City listings with real pricing,
   varied descriptions, school assignments, HOA fees, and a mix of single/
   multi-story and condo/single-family — good for demoing specific scenarios.
