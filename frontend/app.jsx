@@ -6,7 +6,7 @@ const { useState, useRef, useEffect } = React;
 const API_BASE =
   window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
     ? "http://127.0.0.1:8000"
-    : "https://real-estate-matcher-sqlite.onrender.com";
+    : "https://homelens-backend.onrender.com";
 
 // Empty form input -> null (not sent as a filter), otherwise -> Number.
 // Used repeatedly below instead of repeating "value ? Number(value) : null" per field.
@@ -412,10 +412,9 @@ function App() {
     <React.Fragment>
       <header className="title-block">
         <div className="title-block__inner">
-          <div className="title-block__mark">Home<span>Lens</span> - AI that sees homes through your lens!</div>
+          <div className="title-block__mark">Home<span>Lens</span> - AI that sees a home through your <span>lens</span>!</div>
           <div className="title-block__meta">
             <span className="title-block__control">
-              <span className="title-block__control-hint">Any data source works for testing this POC.</span>
               <span className="title-block__control-row">
                 <strong>Property Data:</strong>
                 {backendMeta ? (
