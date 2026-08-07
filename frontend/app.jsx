@@ -15,7 +15,7 @@ function numOrNull(value) {
 }
 
 const DATA_SOURCE_LABELS = {
-  live: "SimplyRETS (Live)",
+  live: "SimplyRETS (Live, ~45 listings)",
   realistic: "Small Dataset (14 listings)",
   generated: "Large Dataset (500+ listings)",
 };
