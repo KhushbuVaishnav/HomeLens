@@ -155,6 +155,33 @@ def build_description(is_quiet, is_updated, has_office, is_single_story) -> str:
     return " ".join(parts)
 
 
+SIMPLYRETS_TRIAL_PHOTO_IDS = [2, 5, 9, 15]
+# These are real listings from SimplyRETS' own public trial/demo dataset —
+# the same "sandbox SimplyRETS" data this app's `live` data source pulls
+# from — each with a real exterior + interior photo pair on their public
+# CDN (properties/trial/home{N}.jpg + home-inside-{N}.jpg). Verified
+# directly: each of these 4 numbers was found in an actual SimplyRETS API
+# response (either their own docs example, or a real third-party site
+# dumping live API output), and every URL below was fetched directly to
+# confirm it returns real image bytes, not a 404. Deliberately NOT a
+# broader guessed range — other numbers likely exist too, but weren't
+# independently confirmed, and a broken image is worse than a repeated one.
+
+
+def make_photos(index: int) -> list[str]:
+    """Exactly 2 real, working real-estate photos per listing (exterior +
+    interior) from SimplyRETS' own trial CDN, cycling through the 4
+    verified pairs above — so photos repeat every 4 listings rather than
+    being unique to all 500, since that's the full set that could be
+    verified as real without guessing at un-confirmed numbers. Never sent
+    to the AI provider — _build_listing_payload() in matching_service.py
+    doesn't include this field at all, so it costs nothing in tokens and
+    the model never sees it."""
+    photo_id = SIMPLYRETS_TRIAL_PHOTO_IDS[index % len(SIMPLYRETS_TRIAL_PHOTO_IDS)]
+    base = "https://s3-us-west-2.amazonaws.com/cdn.simplyrets.com/properties/trial"
+    return [f"{base}/home{photo_id}.jpg", f"{base}/home-inside-{photo_id}.jpg"]
+
+
 def generate(count: int) -> list[dict]:
     listings = []
     used_addresses = set()
@@ -206,7 +233,7 @@ def generate(count: int) -> list[dict]:
             "association": {"fee": hoa_fee},
             "schools": NEIGHBORHOOD_SCHOOLS[neighborhood],
             "remarks": build_description(is_quiet, is_updated, has_office, is_single_story),
-            "photos": [],
+            "photos": make_photos(i),
         }
         listings.append(listing)
 

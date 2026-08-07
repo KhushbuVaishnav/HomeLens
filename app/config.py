@@ -83,6 +83,18 @@ class Settings:
     # extreme value, since diminishing returns and thread overhead mean
     # more isn't always proportionally faster.
 
+    DEBUG_MODE: bool = os.environ.get("DEBUG_MODE", "false").lower() == "true"
+    # Off by default. Gates ONLY the two really large per-batch logs in
+    # matching_service.py: the full raw listing JSON sent to the AI
+    # provider, and the full raw response text it sends back — each can
+    # easily be a multi-KB JSON dump, once per batch, and drowns out
+    # everything else in the terminal (test output, real errors). Every
+    # other log stays on regardless of this setting — rate-limit headers,
+    # exact token usage, retry notices, job/match errors, config warnings —
+    # since those are short, single-line, and genuinely useful by default.
+    # Turn this on temporarily when debugging a parse failure or confirming
+    # a specific field made it into what the model actually received.
+
     # --- API / server ---
     CORS_ALLOW_ORIGINS: list = os.environ.get("CORS_ALLOW_ORIGINS", "*").split(",")
     DEFAULT_FETCH_LIMIT: int = int(os.environ.get("DEFAULT_FETCH_LIMIT", 1000))

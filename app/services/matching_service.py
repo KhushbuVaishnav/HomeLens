@@ -285,7 +285,12 @@ def _log_raw_output(provider: str, listings_batch: list[dict], raw_text: str) ->
     to the browser). Useful for actually seeing what the model said,
     e.g. while tuning the system prompt or debugging a parse failure.
     Includes the batch's mls_ids so it's identifiable in a busy,
-    concurrent log with several batches' output interleaved."""
+    concurrent log with several batches' output interleaved.
+
+    Gated behind DEBUG_MODE (see config.py) — this is a full model
+    response per batch, easily a multi-KB dump, off by default."""
+    if not settings.DEBUG_MODE:
+        return
     ids = [str(l.get("mls_id")) for l in listings_batch]
     print(f"[{provider} raw output] batch mls_ids={ids}:\n{raw_text}\n{'-' * 60}")
 
@@ -297,7 +302,12 @@ def _log_raw_input(provider: str, listings_batch: list[dict], user_message: str)
     repeated here since it's identical on every call; this is the part
     that varies per batch and is what actually matters for debugging,
     e.g. confirming a field like year_built genuinely made it into what
-    the model received, not just that it exists in our own data)."""
+    the model received, not just that it exists in our own data).
+
+    Gated behind DEBUG_MODE (see config.py) — same reasoning as
+    _log_raw_output, this is a full JSON payload per batch."""
+    if not settings.DEBUG_MODE:
+        return
     ids = [str(l.get("mls_id")) for l in listings_batch]
     print(f"[{provider} raw input] batch mls_ids={ids}:\n{user_message}\n{'-' * 60}")
 
