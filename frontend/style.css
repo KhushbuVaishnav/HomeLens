@@ -37,13 +37,21 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Faint blueprint grid backdrop */
+/* Faint blueprint grid, with a USA state-outline watermark further back.
+   State outlines are the actual public-domain Wikimedia Commons
+   Blank_US_Map.svg boundary data (see frontend/usa-map-bg.svg) -- real
+   geography, not a generic placeholder, styled to read as a faint
+   architectural line drawing behind the grid rather than compete with
+   foreground content. */
 body {
   background-image:
     linear-gradient(var(--line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--line) 1px, transparent 1px);
-  background-size: 48px 48px;
-  background-attachment: fixed;
+    linear-gradient(90deg, var(--line) 1px, transparent 1px),
+    url("usa-map-bg.svg");
+  background-size: 48px 48px, 48px 48px, min(1600px, 150vw) auto;
+  background-position: 0 0, 0 0, center 80px;
+  background-repeat: repeat, repeat, no-repeat;
+  background-attachment: fixed, fixed, fixed;
   background-color: var(--ink);
   opacity: 1;
 }
