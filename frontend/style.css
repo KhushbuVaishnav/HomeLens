@@ -34,6 +34,7 @@ html, body {
   background: var(--ink);
   color: var(--paper);
   font-family: var(--font-body);
+  font-weight: 700;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -116,7 +117,7 @@ button {
 .title-block__source-note {
   margin: 8px 0 0;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 700;
   color: var(--paper);
   align-self: stretch;
 }
@@ -141,7 +142,7 @@ button {
 
 .title-block__meta strong {
   color: var(--paper);
-  font-weight: 600;
+  font-weight: 700;
   margin-right: 10px;
 }
 
@@ -170,7 +171,7 @@ button {
   color: var(--blueprint);
   font-family: var(--font-mono);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   text-align: center;
@@ -296,7 +297,7 @@ button {
   margin-top: 3px;
   font-family: var(--font-body);
   font-size: 10.5px;
-  font-weight: 400;
+  font-weight: 700;
   color: var(--paper);
 }
 
@@ -332,7 +333,7 @@ button {
 .field .field__ai-label {
   font-family: var(--font-display);
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: normal;
   text-transform: none;
   color: var(--blueprint);
@@ -631,7 +632,7 @@ button {
 .match-gauge__score {
   font-family: var(--font-mono);
   font-size: 30px;
-  font-weight: 500;
+  font-weight: 700;
   line-height: 1;
 }
 
@@ -744,7 +745,7 @@ button {
 
 .spec-row__item strong {
   color: var(--paper);
-  font-weight: 500;
+  font-weight: 700;
 }
 
 .result-card__reason {
@@ -765,14 +766,14 @@ button {
   text-transform: uppercase;
   display: block;
   margin-bottom: 4px;
-  font-weight: 500;
+  font-weight: 700;
 }
 
 .requirements-badge {
   text-transform: none;
   color: var(--muted);
   letter-spacing: normal;
-  font-weight: 400;
+  font-weight: 700;
 }
 
 .expand-toggle {
@@ -845,7 +846,7 @@ button {
 
 .result-card__expanded-meta strong {
   color: var(--muted-dim);
-  font-weight: 500;
+  font-weight: 700;
 }
 
 .spinner {
