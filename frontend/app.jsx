@@ -430,6 +430,11 @@ function App() {
                     — POC, {DATA_SOURCE_CITIES[selectedDataSource]} only
                   </span>
                 )}
+                {selectedDataSource === "live" && DATA_SOURCE_DEFAULT_CITY.live && (
+                  <span className="title-block__scope-note">
+                    — currently {DATA_SOURCE_DEFAULT_CITY.live}, TX
+                  </span>
+                )}
               </span>
             </span>
             <span className="title-block__control title-block__control--secondary">
