@@ -408,15 +408,12 @@ function App() {
     <React.Fragment>
       <header className="title-block">
         <div className="title-block__inner">
-          <div className="title-block__brand">
-            <div className="title-block__mark">Home<span>Lens</span></div>
-            <p className="title-block__tagline">AI that sees homes through your lens!</p>
-          </div>
+          <div className="title-block__mark">Home<span>Lens</span> - AI that sees homes through your lens!</div>
           <div className="title-block__meta">
             <span className="title-block__control">
               <span className="title-block__control-hint">Any data source works for testing this POC.</span>
               <span className="title-block__control-row">
-                <strong>Property Data</strong>
+                <strong>Property Data:</strong>
                 {backendMeta ? (
                   <select
                     className="title-block__select"
@@ -437,7 +434,7 @@ function App() {
             </span>
             <span className="title-block__control title-block__control--secondary">
               <span className="title-block__control-row">
-                <strong>Matched by LLM Provider</strong>
+                <strong>Matched by LLM Provider:</strong>
                 {backendMeta ? (
                   <select
                     className="title-block__select"
