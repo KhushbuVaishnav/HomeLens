@@ -564,6 +564,7 @@ def start_match_job(user_preferences: str, listings: list[dict], ai_provider: st
         "cancel_event": threading.Event(),
         "total_batches": total_batches,
         "completed_batches": 0,
+        "failed_batches": 0,       # batches that errored out (e.g. timeout) — the search continues without them, doesn't abort
         "in_flight_count": 0,      # how many batches are actively running right now, at this instant
         "retry_count": 0,          # cumulative retries triggered so far across the whole job
         "job_lock": threading.Lock(),  # protects retry_count from concurrent batch threads
@@ -643,8 +644,23 @@ def _run_job(job_id: str, user_preferences: str, listings: list[dict], ai_provid
             while in_flight:
                 done, _ = wait(in_flight.keys(), return_when=FIRST_COMPLETED)
                 for future in done:
-                    for r in future.result():
-                        scores_by_id[str(r["mls_id"])] = r
+                    try:
+                        for r in future.result():
+                            scores_by_id[str(r["mls_id"])] = r
+                    except MatchingError as e:
+                        # One batch failing (e.g. a timeout) shouldn't sink
+                        # the entire search — log it, count it, and keep
+                        # going with everything else. The listings in this
+                        # specific batch just won't appear in the results;
+                        # everything else still completes normally.
+                        print(f"[job {job_id} batch failed] {e.technical_detail}")
+                        job["failed_batches"] += 1
+                    except Exception as e:
+                        # Same reasoning as MatchingError above, but for a
+                        # genuinely unanticipated exception type — still
+                        # shouldn't sink the whole search over one batch.
+                        print(f"[job {job_id} batch failed] unexpected exception type {type(e).__name__}: {e}")
+                        job["failed_batches"] += 1
                     job["completed_batches"] += 1
                     del in_flight[future]
                     update_results_so_far()  # progressive results — every batch, not just the last one

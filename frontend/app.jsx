@@ -16,8 +16,8 @@ function numOrNull(value) {
 
 const DATA_SOURCE_LABELS = {
   live: "SimplyRETS (Live, ~45 listings)",
-  realistic: "Small Dataset (14 listings)",
-  generated: "Large Dataset (500+ listings)",
+  realistic: "Small Dataset (14 listings)", // not shown in the UI dropdown (filtered out) — kept for scripts/verify_test_cases.py and any direct API use
+  generated: "Static JSON Data (500+ listings)",
 };
 
 // POC scope note only — the static sources are small, fixed datasets
@@ -209,6 +209,7 @@ function App() {
   const [results, setResults] = useState([]);
   const [progress, setProgress] = useState({ completed: 0, total: 0, inFlight: 0 });
   const [retryCount, setRetryCount] = useState(0);
+  const [failedBatches, setFailedBatches] = useState(0);
   const [wasCancelled, setWasCancelled] = useState(false);
   const abortControllerRef = useRef(null); // used for the quick /listings (Browse all) call
   const jobIdRef = useRef(null);           // used for the background AI-matching job
@@ -281,6 +282,7 @@ function App() {
     setResults([]);
     setProgress({ completed: 0, total: 0, inFlight: 0 });
     setRetryCount(0);
+    setFailedBatches(0);
     setWasCancelled(false);
   }
 
@@ -298,6 +300,7 @@ function App() {
     setResults([]); // clear stale results from the previous search immediately
     setProgress({ completed: 0, total: 0, inFlight: 0 });
     setRetryCount(0);
+    setFailedBatches(0);
     setWasCancelled(false);
 
     const controller = new AbortController();
@@ -381,6 +384,7 @@ function App() {
         const data = await res.json();
         setProgress({ completed: data.completed_batches, total: data.total_batches, inFlight: data.in_flight_count || 0 });
         setRetryCount(data.retry_count || 0);
+        setFailedBatches(data.failed_batches || 0);
         setResults(data.matches || []); // progressive — updates every poll, not just at completion
 
         if (data.status === "done" || data.status === "cancelled") {
@@ -420,9 +424,11 @@ function App() {
                     value={selectedDataSource || ""}
                     onChange={(e) => setSelectedDataSource(e.target.value)}
                   >
-                    {backendMeta.available_data_sources.map((s) => (
-                      <option key={s} value={s}>{DATA_SOURCE_LABELS[s] || s}</option>
-                    ))}
+                    {backendMeta.available_data_sources
+                      .filter((s) => s !== "realistic") // UI-only simplification — backend/API and scripts/verify_test_cases.py still fully support it
+                      .map((s) => (
+                        <option key={s} value={s}>{DATA_SOURCE_LABELS[s] || s}</option>
+                      ))}
                   </select>
                 ) : "connecting..."}
                 {selectedDataSource && DATA_SOURCE_CITIES[selectedDataSource] && (
@@ -768,6 +774,14 @@ function App() {
               {results.length > 0
                 ? `Search cancelled after ${progress.completed} of ${progress.total} batches — showing partial results from what was already scored.`
                 : `Search cancelled after ${progress.completed} of ${progress.total} batches — none of what was scored passed the match threshold.`}
+            </div>
+          )}
+
+          {status === "done" && !wasCancelled && failedBatches > 0 && (
+            <div className="cancelled-banner">
+              This search is incomplete — {failedBatches} of {progress.total} batch{failedBatches === 1 ? "" : "es"} failed
+              due to an AI service issue (e.g. a timeout). Results below are from everything that succeeded; try
+              searching again for a chance at the listings that were missed.
             </div>
           )}
 
