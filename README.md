@@ -24,6 +24,7 @@ HomeLens/
 │   ├── generate_listings.py   # Regenerate the large synthetic dataset
 │   ├── analyze_scores.py      # See real AI score distributions (for tuning SCORE_THRESHOLD)
 │   ├── verify_test_cases.py   # Hard invariants + keyword snapshot + AI accuracy regression test
+│   ├── llm_judge.py            # LLM-as-judge: opposite provider reviews score_batch's real verdicts
 │   ├── seed_schools_db.py     # Builds schools.db from schools.json — run before first start
 │   └── run_cli.py             # Standalone pipeline run, no API server needed
 ├── frontend/                  # Dependency-free React UI (React+Babel via CDN, no build step)
@@ -246,6 +247,66 @@ different depending on which, and it matters:**
   model/prompt regression to fix, or (rarely) a sign the ground truth
   assertions themselves need revisiting if `realistic_listings.json` is
   ever intentionally edited.
+
+## LLM-as-judge accuracy check: `scripts/llm_judge.py`
+
+```bash
+python scripts/llm_judge.py                                     # default: 14 listings, 3 queries, ~12 calls
+python scripts/llm_judge.py --full-sweep --sample 50             # a 50-listing sample of DATA_SOURCE instead
+python scripts/llm_judge.py --full-sweep --query "quiet street, walkable to Caltrain"
+```
+
+Has whichever provider you're **not** scoring with — `AI_PROVIDER` picks
+the scorer, `llm_judge.py` always uses the opposite one automatically —
+review `score_batch`'s real verdicts for whether each requirement judgment
+is actually supported by the listing's text. Not a replacement for the
+`--with-ai` test above, which is real hand-verified ground truth; a judge
+model isn't inherently more trustworthy than the model being judged, and
+if both share the same blind spot they'll agree while both being wrong.
+What it's for: **triage**. Instead of reading through every listing
+yourself, you get a shortlist of exactly which verdicts a second model
+disagreed with, worth a human look — a `[DISAGREE]` line is a
+prioritization signal, not proof of an error. You still make the final
+call, the same way you already do for the `--with-ai` ground truth above.
+
+Both `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` need to be set in `.env`
+regardless of which one `AI_PROVIDER` points to, since the judge always
+needs the other one — the script checks this up front and tells you
+exactly what's missing rather than failing partway through a run.
+
+Judging happens in the same `BATCH_SIZE`-sized batches scoring already
+uses, not one call per listing — reviewing N listings costs `ceil(N/8)`
+calls, not N:
+
+| Scope | Scoring calls | Judge calls | Total |
+|---|---|---|---|
+| Default — same 14 listings + 3 queries `--with-ai` uses above | 6 | 6 | **12** |
+| `--full-sweep` against `generated` (500 listings), 1 query | 63 | 63 | **126** |
+| `--full-sweep --sample 50`, 1 query | 7 | 7 | **14** |
+
+For an exact dollar cost rather than a call count, run with
+`DEBUG_MODE=true` (see above) to log real token usage, then apply your
+provider's published per-token rate.
+
+**Getting more accurate over time — `--review`:**
+
+```bash
+python scripts/llm_judge.py --review
+```
+
+After each `[DISAGREE]`, asks interactively who was actually right —
+`[j]` judge / `[s]` scorer / `[b]` both wrong / `[enter]` skip — plus an
+optional one-line lesson, and saves your answer to
+`scripts/judge_feedback.json`. On every future run (with or without
+`--review` — the flag only controls whether *this* run collects new
+corrections), the most recent corrections get folded into the judge's
+prompt as worked examples. This is few-shot learning from your
+corrections, not training — no model weights change, and there's no
+version of this where review stops being useful entirely. What
+realistically improves is the *frequency* of disagreements needing your
+attention, not the review disappearing. `--review` is opt-in specifically
+because it blocks on keyboard input after every disagreement — leave it
+off for an unattended run.
 
 ## Moving to real MLS data
 

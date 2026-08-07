@@ -13,7 +13,7 @@ checkbox:
 
 Diagrams are [Mermaid](https://mermaid.js.org) — render natively on GitHub,
 GitLab, and most modern markdown viewers. Standalone `.mmd` files are in
-`mermaid/` for [mermaid.live](https://mermaid.live).
+`diagrams/` for [mermaid.live](https://mermaid.live).
 
 ---
 
@@ -245,7 +245,7 @@ flowchart LR
 
 ---
 
-## 6. Proposed Enhancement — Semantic Retrieval Pre-Filter (Pinecone)
+## 6. Proposed Enhancement — Semantic Retrieval Pre-Filter (Pinecone or sqlite-vec)
 
 **Status: design discussion only. Nothing in this section is implemented.**
 No Pinecone dependency, config, or code exists anywhere in this repo. This
@@ -340,6 +340,33 @@ already runs once per `schools.json` change rather than on every request.
   evaluated on architectural thinking, but worth stating plainly rather
   than implying it solves an urgent problem at current scale.
 
+### Alternative worth naming: `sqlite-vec`
+
+Pinecone remains the primary option sketched above — this doesn't replace
+it, just names a lower-commitment alternative for the same retrieval-
+pre-filter role. [`sqlite-vec`](https://github.com/asg017/sqlite-vec) is a
+free, open-source SQLite extension that adds vector KNN search directly
+into SQLite via a virtual table (`CREATE VIRTUAL TABLE vec_index USING
+vec0(embedding float[N])`) — no separate server, no account, no API key.
+
+The specific reason this fits *this* project better than a generic "free
+vector DB" comparison would suggest: `schools.db` already establishes the
+exact pattern a `sqlite-vec` index would follow — built once by
+`seed_schools_db.py`, committed to the repo, read-only at runtime,
+specifically chosen because it's safe on Render's ephemeral free-tier
+filesystem (see the Schools section above). A listing-embeddings index
+could follow that identical precedent: built once (or rebuilt whenever
+`generated_listings.json` changes, the same trigger as reseeding schools),
+committed, queried read-only — zero new infrastructure, zero new secrets,
+consistent with the "SQLite for local structured data, no external DB
+server" choice already made in this codebase.
+
+The tradeoff going the other way: `sqlite-vec` only makes sense for the
+`generated` and `realistic` sources, where the data already lives in a
+file you control. `live` (the real SimplyRETS sandbox) doesn't fit this
+pattern any better than it fit Pinecone above — a third-party API's
+content isn't something you pre-build a local index against.
+
 ### If this moves forward
 
 A natural next step, still without writing code, would be sketching the
@@ -349,4 +376,132 @@ decisions — the same "verify claims against real data before implementing"
 pattern already established for this project (handoff §20), applied to
 measuring actual score-quality impact of pre-filtering before committing
 to a K value, the same way `analyze_scores.py` measures real distributions
-before `SCORE_THRESHOLD` gets set.
+before `SCORE_THRESHOLD` gets set. This decision — Pinecone vs.
+`sqlite-vec` — is itself part of that sketch, not something to
+settle here.
+
+---
+
+## 7. LLM-as-judge Accuracy Check
+
+**Status: implemented** — `scripts/llm_judge.py`. Unlike §6, this one is
+real code, not a design sketch.
+
+### The problem it solves — and what it deliberately does NOT solve
+
+`verify_test_cases.py`'s Tier 3 already gives real ground truth: every
+expected answer was hand-verified against the actual remarks text of the
+14 fixed `realistic_listings.json` listings. Its limit isn't the judging
+method, it's scale — hand-verifying more than 14 listings across more than
+3 narrow dimensions isn't something to do by hand for every new query.
+
+An LLM judge is **not a replacement for that ground truth** and isn't
+inherently more trustworthy than the model being judged — if scorer and
+judge share the same blind spot (e.g. both misread "close to Caltrain"
+identically), they'll agree confidently while both being wrong, and the
+judge gives zero signal in that case. What it's actually good for is
+**triage at scale**: turning "read every listing yourself to catch a bad
+verdict" into "read the handful the judge flagged as disagreements." A
+disagreement is a prioritization signal for where a human should look
+next, not proof of an error — the human (you) still makes the final call,
+exactly as already happens for Tier 3.
+
+### How it runs
+
+```mermaid
+sequenceDiagram
+    actor Dev
+    participant Judge as llm_judge.py
+    participant SB as score_batch()<br/>(existing, unchanged)
+    participant JB as judge_batch()<br/>(new)
+    participant P1 as Scoring provider
+    participant P2 as Judging provider<br/>(opposite of P1)
+
+    Dev->>Judge: python scripts/llm_judge.py
+    Judge->>Judge: judge_provider = opposite of settings.AI_PROVIDER
+    loop every BATCH_SIZE listings
+        Judge->>SB: score_batch(preferences, batch)
+        SB->>P1: real API call
+        P1-->>SB: requirements[] per listing
+        SB-->>Judge: verdicts
+    end
+    loop every BATCH_SIZE listings
+        Judge->>JB: judge_batch(preferences, batch, verdicts)
+        JB->>P2: real API call — reviews every verdict in the batch
+        P2-->>JB: agrees / judge_reason per listing
+        JB-->>Judge: judge results
+    end
+    Judge-->>Dev: agreement rate + [DISAGREE] lines for human review
+```
+
+Never runs as part of the live app — nothing in `app/routers/` or
+`app/main.py` touches this. It's a manual dev tool, the same category as
+`analyze_scores.py` and `verify_test_cases.py`, run from the command line.
+
+### Provider selection — automatic, always the opposite
+
+`AI_PROVIDER` in `.env` picks which provider does the real scoring, same
+as it always has. The judge always uses whichever provider that ISN'T —
+`anthropic` scored → `openai` judges, and vice versa — chosen automatically
+by `_opposite_provider()`, never something you configure separately. Both
+`ANTHROPIC_API_KEY` and `OPENAI_API_KEY` need to be set for this script to
+run regardless of which one `AI_PROVIDER` points to; if the judge's key is
+missing, the script says exactly that and exits before making any call,
+rather than failing partway through a run.
+
+### Batching — the design choice that keeps this cheap
+
+Judging happens in the same `BATCH_SIZE`-sized batches scoring already
+uses — a single judge API call reviews up to 8 listings at once and
+returns one `{mls_id, agrees, judge_reason}` object per listing, same
+attribution pattern `score_batch` already uses for multiple listings
+sharing one call. Judging N listings costs `ceil(N/8)` calls, not N —
+reviewing 14 listings costs 2 judge calls, not 14.
+
+### Cost, in real call counts
+
+| Scope | Scoring calls | Judge calls | Total |
+|---|---|---|---|
+| Default (`llm_judge.py`) — same 14 listings + 3 queries Tier 3 uses | 6 | 6 | **12** |
+| `--full-sweep` against `generated` (500 listings), 1 query | 63 | 63 | **126** |
+| `--full-sweep --sample 50`, 1 query | 7 | 7 | **14** |
+
+For an exact dollar figure rather than a call count: run with
+`DEBUG_MODE=true` (§ above) to log real token usage, then apply your
+provider's published per-token rate for whichever models you're running —
+deliberately not estimated here, since per-token pricing varies by model
+and stating a number with false precision would be worse than not stating
+one.
+
+### Feedback loop — `--review`, few-shot, not training
+
+**Status: implemented.** An opt-in flag that lets a human correction
+actually shape future judge calls, without overclaiming what that means.
+
+**What this is: few-shot learning from your corrections, not training.**
+No model weights change — there's no access path to that for either
+provider (see the RL discussion this grew out of). What happens instead:
+when `--review` is passed, every `[DISAGREE]` prompts you interactively —
+`[j] judge was right / [s] scorer was right / [b] both wrong / [enter]
+skip`, plus an optional one-line lesson — and the answer is appended to
+`scripts/judge_feedback.json`. On every subsequent run (with or without
+`--review` — the flag only controls whether NEW corrections get collected
+*this* run), the most recent corrections (capped at
+`MAX_FEW_SHOT_EXAMPLES = 8`, to keep prompt size bounded as the file
+grows) get folded into `JUDGE_SYSTEM_PROMPT` as worked examples before the
+judge reviews anything new.
+
+**What this deliberately does not promise.** "So I don't have to review
+anymore" isn't an honest end-state to build toward — there's no version of
+this where a model self-corrects to zero errors without a human ever
+checking in, and the feedback loop itself depends on that exact review
+happening. What's realistically achievable is the *frequency* dropping,
+not the review disappearing. This is also why using past feedback happens
+unconditionally on every run (not gated behind `--review`) — the whole
+point is that corrections keep paying off on runs where you're not
+actively reviewing anything.
+
+**Why `--review` is opt-in, not automatic.** It blocks on `stdin` after
+every disagreement — appropriate for a deliberate review session, actively
+wrong for an unattended or scripted run (e.g. inside a larger automated
+check), which would just hang waiting for keyboard input that never comes.
