@@ -209,7 +209,7 @@ def _score_batch_anthropic(user_preferences: str, listings_batch: list[dict], on
             "ANTHROPIC_API_KEY is not set — required to use Claude as the AI provider. Add it to .env, or select a different provider.",
         )
 
-    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY, timeout=settings.REQUEST_TIMEOUT_SECONDS)
     user_message = f"Buyer wants: {user_preferences}\n\nListings:\n{json.dumps(_build_listing_payload(listings_batch), indent=2)}"
     _log_raw_input("Anthropic", listings_batch, user_message)
 
@@ -236,6 +236,18 @@ def _score_batch_anthropic(user_preferences: str, listings_batch: list[dict], on
             "Anthropic rate limit hit repeatedly even after retrying — you're sending requests "
             "faster than your account's current limit allows. Try lowering MAX_CONCURRENT_BATCHES "
             "in .env, or check your rate limits in the Anthropic Console.",
+        ) from e
+    except anthropic.APITimeoutError as e:
+        raise MatchingError(
+            _CLIENT_MSG_TRANSIENT,
+            f"Anthropic request timed out after {settings.REQUEST_TIMEOUT_SECONDS}s with no response — "
+            "likely a network issue or a stalled connection, not something wrong with your search itself. "
+            "Try again, or increase REQUEST_TIMEOUT_SECONDS in .env if this keeps happening on large batches.",
+        ) from e
+    except anthropic.APIConnectionError as e:
+        raise MatchingError(
+            _CLIENT_MSG_TRANSIENT,
+            "Couldn't establish a connection to Anthropic's API — check your network connection.",
         ) from e
     except anthropic.AuthenticationError as e:
         raise MatchingError(
@@ -322,7 +334,7 @@ def _humanize_openai_error(e) -> tuple[str, str]:
 
 def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_retry=None) -> list[dict]:
     import openai
-    from openai import OpenAI, AuthenticationError, NotFoundError, APIStatusError
+    from openai import OpenAI, AuthenticationError, NotFoundError, APIStatusError, APITimeoutError, APIConnectionError
 
     if not settings.OPENAI_API_KEY:
         raise MatchingError(
@@ -330,7 +342,7 @@ def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_re
             "OPENAI_API_KEY is not set — required to use OpenAI as the AI provider. Add it to .env, or select a different provider.",
         )
 
-    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+    client = OpenAI(api_key=settings.OPENAI_API_KEY, timeout=settings.REQUEST_TIMEOUT_SECONDS)
     user_message = f"Buyer wants: {user_preferences}\n\nListings:\n{json.dumps(_build_listing_payload(listings_batch), indent=2)}"
     _log_raw_input("OpenAI", listings_batch, user_message)
 
@@ -369,6 +381,18 @@ def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_re
             "OpenAI rate limit hit repeatedly even after retrying — you're sending requests faster "
             "than your account's current limit allows. Try lowering MAX_CONCURRENT_BATCHES in .env, "
             "or check your rate limits at platform.openai.com.",
+        ) from e
+    except APITimeoutError as e:
+        raise MatchingError(
+            _CLIENT_MSG_TRANSIENT,
+            f"OpenAI request timed out after {settings.REQUEST_TIMEOUT_SECONDS}s with no response — "
+            "likely a network issue or a stalled connection, not something wrong with your search itself. "
+            "Try again, or increase REQUEST_TIMEOUT_SECONDS in .env if this keeps happening on large batches.",
+        ) from e
+    except APIConnectionError as e:
+        raise MatchingError(
+            _CLIENT_MSG_TRANSIENT,
+            "Couldn't establish a connection to OpenAI's API — check your network connection.",
         ) from e
     except AuthenticationError as e:
         raise MatchingError(

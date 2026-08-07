@@ -327,6 +327,17 @@ button {
   color: var(--paper);
 }
 
+.field .field__ai-label {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--blueprint);
+  display: block;
+  margin-bottom: 6px;
+}
+
 .field input,
 .field textarea,
 .field select {

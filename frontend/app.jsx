@@ -672,7 +672,11 @@ function App() {
           {searchMode !== "traditional" && (
             <div className="field-group">
               <div className="field field--full">
-                <label htmlFor="preferences">Describe the home you actually want</label>
+                <label htmlFor="preferences" className="field__ai-label">
+                  {searchMode === "nlp_only"
+                    ? "Describe, in your own words, what your ideal home looks like!"
+                    : "Describe, in your own words, the details that make a difference!"}
+                </label>
                 <textarea
                   id="preferences"
                   value={preferences}

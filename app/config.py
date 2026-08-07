@@ -65,6 +65,13 @@ class Settings:
     SCORE_THRESHOLD: int = int(os.environ.get("SCORE_THRESHOLD", 60))
     TEMPERATURE: float = float(os.environ.get("TEMPERATURE", 0.2))
     MAX_TOKENS: int = int(os.environ.get("MAX_TOKENS", 2000))
+    REQUEST_TIMEOUT_SECONDS: int = int(os.environ.get("REQUEST_TIMEOUT_SECONDS", 60))
+    # Without this, a single hung network connection to Claude/OpenAI (which
+    # can genuinely happen — dropped connections, proxy interference, a
+    # stalled server-side response) would block that batch's thread forever.
+    # Since Cancel only stops NEW batches from being submitted — it can't
+    # recall one already in flight — a permanently-stuck request would
+    # freeze the entire job with no way to stop it, even after cancelling.
     MAX_CONCURRENT_BATCHES: int = int(os.environ.get("MAX_CONCURRENT_BATCHES", 4))
     # How many batches run at once instead of one-at-a-time. Higher = faster
     # wall-clock time for a big search. Don't guess this — check the
