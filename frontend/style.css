@@ -48,10 +48,6 @@ body {
   opacity: 1;
 }
 
-body::before {
-  content: "";
-}
-
 a { color: var(--blueprint); }
 
 button {
@@ -573,12 +569,6 @@ button {
   grid-template-columns: 1fr 1fr;
   gap: 24px;
   align-items: start;
-}
-
-.results-column__empty {
-  color: var(--muted-dim);
-  font-size: 13px;
-  font-style: italic;
 }
 
 @media (max-width: 860px) {

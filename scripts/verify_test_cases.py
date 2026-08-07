@@ -189,10 +189,6 @@ def run_frequency_snapshot_test(update_baseline: bool):
 
 
 # ---------------------------------------------------------------------------
-# Tier 3 — real AI scoring spot-check (needs a real API key, costs real usage)
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # Tier 3 — AI accuracy regression test.
 #
 # Uses app/data/realistic_listings.json specifically (NOT whatever

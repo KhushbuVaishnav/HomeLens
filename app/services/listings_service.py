@@ -49,6 +49,7 @@ def build_hard_filters(query) -> HardFilters:
         exclude_styles=query.exclude_styles,
     )
 
+
 def fetch_listings(filters: HardFilters, limit: int = None, data_source: str = None) -> list[dict]:
     """
     Returns raw listing dicts from the given data_source, or
@@ -82,7 +83,6 @@ def fetch_listings(filters: HardFilters, limit: int = None, data_source: str = N
 
     if filters.max_stories is not None:
         listings = [l for l in listings if (l.get("property", {}).get("stories") or 0) <= filters.max_stories]
-
 
     if filters.exclude_styles:
         listings = [l for l in listings if l.get("property", {}).get("style") not in filters.exclude_styles]

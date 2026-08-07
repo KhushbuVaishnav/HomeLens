@@ -466,6 +466,33 @@ def score_batch(user_preferences: str, listings_batch: list[dict], ai_provider: 
     return _compute_deterministic_scores(raw)
 
 
+def _merge_and_rank(listings: list[dict], scores_by_id: dict) -> list[dict]:
+    """Merges scored results into their listings, drops anything below
+    SCORE_THRESHOLD (or never scored at all), and sorts best-first.
+
+    Shared by rank_listings() (single blocking call) and _run_job's
+    update_results_so_far() (progressive job results) so the two paths
+    can't drift apart — they used to each implement this merge separately,
+    which is exactly the kind of duplication that caused _build_batches to
+    drift out of sync in the past (see that function's docstring)."""
+    ranked = []
+    for listing in listings:
+        result = scores_by_id.get(str(listing["mls_id"]))
+        if not result:
+            continue
+        if result["score"] < settings.SCORE_THRESHOLD:
+            continue
+        ranked.append({
+            **listing,
+            "match_score": result["score"],
+            "match_reason": result["reason"],
+            "requirements_total": result.get("requirements_total", 0),
+            "requirements_met": result.get("requirements_met", 0),
+        })
+    ranked.sort(key=lambda x: x["match_score"], reverse=True)
+    return ranked
+
+
 def rank_listings(user_preferences: str, listings: list[dict], ai_provider: str = None) -> list[dict]:
     """Batches, scores, merges, filters by threshold, sorts best-first.
     Synchronous, blocking, no cancellation — kept for the CLI script and
@@ -494,23 +521,7 @@ def rank_listings(user_preferences: str, listings: list[dict], ai_provider: str 
             for r in future.result():
                 scores_by_id[str(r["mls_id"])] = r  # str() — model may return ids as strings even when source has ints
 
-    ranked = []
-    for listing in listings:
-        result = scores_by_id.get(str(listing["mls_id"]))
-        if not result:
-            continue
-        if result["score"] < settings.SCORE_THRESHOLD:
-            continue
-        ranked.append({
-            **listing,
-            "match_score": result["score"],
-            "match_reason": result["reason"],
-            "requirements_total": result.get("requirements_total", 0),
-            "requirements_met": result.get("requirements_met", 0),
-        })
-
-    ranked.sort(key=lambda x: x["match_score"], reverse=True)
-    return ranked
+    return _merge_and_rank(listings, scores_by_id)
 
 
 # ---------------------------------------------------------------------------
@@ -609,22 +620,7 @@ def _run_job(job_id: str, user_preferences: str, listings: list[dict], ai_provid
         results area until the whole thing finishes. Cheap to do on every
         batch: at most 500 listings, a plain filter+sort, negligible cost
         next to the multi-second network calls this runs alongside."""
-        ranked = []
-        for listing in listings:
-            result = scores_by_id.get(str(listing["mls_id"]))
-            if not result:
-                continue
-            if result["score"] < settings.SCORE_THRESHOLD:
-                continue
-            ranked.append({
-                **listing,
-                "match_score": result["score"],
-                "match_reason": result["reason"],
-                "requirements_total": result.get("requirements_total", 0),
-                "requirements_met": result.get("requirements_met", 0),
-            })
-        ranked.sort(key=lambda x: x["match_score"], reverse=True)
-        job["results"] = ranked
+        job["results"] = _merge_and_rank(listings, scores_by_id)
 
     try:
         with ThreadPoolExecutor(max_workers=settings.MAX_CONCURRENT_BATCHES) as executor:

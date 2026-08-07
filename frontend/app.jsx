@@ -508,170 +508,170 @@ function App() {
           </div>
 
           {searchMode !== "nlp_only" && (
-          <div className="field-group">
-            <div className="field field--full">
-              <label htmlFor="cities">City</label>
-              <input
-                id="cities"
-                type="text"
-                value={filters.cities}
-                onChange={(e) => updateField("cities", e.target.value)}
-                placeholder="Redwood City"
-              />
-            </div>
-
-            <div className="field">
-              <label htmlFor="minPrice">Min price</label>
-              <input
-                id="minPrice"
-                type="number"
-                min="0"
-                max="100000000"
-                step="1000"
-                value={filters.minPrice}
-                onChange={(e) => updateField("minPrice", e.target.value)}
-                placeholder="No min"
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="maxPrice">Max price</label>
-              <input
-                id="maxPrice"
-                type="number"
-                min="0"
-                max="100000000"
-                step="1000"
-                value={filters.maxPrice}
-                onChange={(e) => updateField("maxPrice", e.target.value)}
-                placeholder="No max"
-              />
-            </div>
-
-            <div className="field">
-              <label htmlFor="minBeds">Min beds</label>
-              <input
-                id="minBeds"
-                type="number"
-                min="0"
-                max="20"
-                step="1"
-                value={filters.minBeds}
-                onChange={(e) => updateField("minBeds", e.target.value)}
-                placeholder="Any"
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="minBaths">Min baths</label>
-              <input
-                id="minBaths"
-                type="number"
-                min="0"
-                max="20"
-                step="0.5"
-                value={filters.minBaths}
-                onChange={(e) => updateField("minBaths", e.target.value)}
-                placeholder="Any"
-              />
-            </div>
-
-            <div className="field field--full">
-              <label htmlFor="minSqft">Min sqft</label>
-              <input
-                id="minSqft"
-                type="number"
-                min="0"
-                max="50000"
-                step="50"
-                value={filters.minSqft}
-                onChange={(e) => updateField("minSqft", e.target.value)}
-                placeholder="Any"
-              />
-            </div>
-
-            <div className="field field--full">
-              <label htmlFor="minSchoolRating">Min school rating (1-10)</label>
-              <input
-                id="minSchoolRating"
-                type="number"
-                min="1"
-                max="10"
-                step="1"
-                value={filters.minSchoolRating}
-                onChange={(e) => updateField("minSchoolRating", e.target.value)}
-                placeholder={schoolDataSupported ? "Any" : "Not available for this data source"}
-                disabled={!schoolDataSupported}
-              />
-              {!schoolDataSupported && (
-                <p className="field-note">
-                  {DATA_SOURCE_LABELS[selectedDataSource] || "This data source"} doesn't include school data.
-                </p>
-              )}
-            </div>
-
-            <div className="field field--full field--checkbox">
-              <label htmlFor="strictSchoolRating" className="checkbox-label">
+            <div className="field-group">
+              <div className="field field--full">
+                <label htmlFor="cities">City</label>
                 <input
-                  id="strictSchoolRating"
-                  type="checkbox"
-                  checked={filters.strictSchoolRating}
-                  onChange={(e) => updateField("strictSchoolRating", e.target.checked)}
+                  id="cities"
+                  type="text"
+                  value={filters.cities}
+                  onChange={(e) => updateField("cities", e.target.value)}
+                  placeholder="Redwood City"
+                />
+              </div>
+
+              <div className="field">
+                <label htmlFor="minPrice">Min price</label>
+                <input
+                  id="minPrice"
+                  type="number"
+                  min="0"
+                  max="100000000"
+                  step="1000"
+                  value={filters.minPrice}
+                  onChange={(e) => updateField("minPrice", e.target.value)}
+                  placeholder="No min"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="maxPrice">Max price</label>
+                <input
+                  id="maxPrice"
+                  type="number"
+                  min="0"
+                  max="100000000"
+                  step="1000"
+                  value={filters.maxPrice}
+                  onChange={(e) => updateField("maxPrice", e.target.value)}
+                  placeholder="No max"
+                />
+              </div>
+
+              <div className="field">
+                <label htmlFor="minBeds">Min beds</label>
+                <input
+                  id="minBeds"
+                  type="number"
+                  min="0"
+                  max="20"
+                  step="1"
+                  value={filters.minBeds}
+                  onChange={(e) => updateField("minBeds", e.target.value)}
+                  placeholder="Any"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="minBaths">Min baths</label>
+                <input
+                  id="minBaths"
+                  type="number"
+                  min="0"
+                  max="20"
+                  step="0.5"
+                  value={filters.minBaths}
+                  onChange={(e) => updateField("minBaths", e.target.value)}
+                  placeholder="Any"
+                />
+              </div>
+
+              <div className="field field--full">
+                <label htmlFor="minSqft">Min sqft</label>
+                <input
+                  id="minSqft"
+                  type="number"
+                  min="0"
+                  max="50000"
+                  step="50"
+                  value={filters.minSqft}
+                  onChange={(e) => updateField("minSqft", e.target.value)}
+                  placeholder="Any"
+                />
+              </div>
+
+              <div className="field field--full">
+                <label htmlFor="minSchoolRating">Min school rating (1-10)</label>
+                <input
+                  id="minSchoolRating"
+                  type="number"
+                  min="1"
+                  max="10"
+                  step="1"
+                  value={filters.minSchoolRating}
+                  onChange={(e) => updateField("minSchoolRating", e.target.value)}
+                  placeholder={schoolDataSupported ? "Any" : "Not available for this data source"}
                   disabled={!schoolDataSupported}
                 />
-                Strict (every school must individually meet the minimum, not just the average)
-              </label>
-            </div>
+                {!schoolDataSupported && (
+                  <p className="field-note">
+                    {DATA_SOURCE_LABELS[selectedDataSource] || "This data source"} doesn't include school data.
+                  </p>
+                )}
+              </div>
 
-            <div className="field">
-              <label htmlFor="propertyType">Property type</label>
-              <select
-                id="propertyType"
-                value={filters.propertyType}
-                onChange={(e) => updateField("propertyType", e.target.value)}
-              >
-                <option value="any">Any</option>
-                <option value="SingleFamilyResidence">Single family</option>
-                <option value="Condominium">Condo</option>
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="maxHoa">Max HOA / mo</label>
-              <input
-                id="maxHoa"
-                type="number"
-                min="0"
-                max="20000"
-                step="10"
-                value={filters.maxHoa}
-                onChange={(e) => updateField("maxHoa", e.target.value)}
-                placeholder="Any"
-              />
-            </div>
+              <div className="field field--full field--checkbox">
+                <label htmlFor="strictSchoolRating" className="checkbox-label">
+                  <input
+                    id="strictSchoolRating"
+                    type="checkbox"
+                    checked={filters.strictSchoolRating}
+                    onChange={(e) => updateField("strictSchoolRating", e.target.checked)}
+                    disabled={!schoolDataSupported}
+                  />
+                  Strict (every school must individually meet the minimum, not just the average)
+                </label>
+              </div>
 
-            <div className="field field--full">
-              <label htmlFor="stories">Number of stories</label>
-              <select
-                id="stories"
-                value={filters.stories}
-                onChange={(e) => updateField("stories", e.target.value)}
-              >
-                <option value="any">Any</option>
-                <option value="1">1 story (no stairs)</option>
-                <option value="2plus">2+ stories</option>
-              </select>
-            </div>
-
-            <div className="field field--full field--checkbox">
-              <label htmlFor="excludeRanch" className="checkbox-label">
+              <div className="field">
+                <label htmlFor="propertyType">Property type</label>
+                <select
+                  id="propertyType"
+                  value={filters.propertyType}
+                  onChange={(e) => updateField("propertyType", e.target.value)}
+                >
+                  <option value="any">Any</option>
+                  <option value="SingleFamilyResidence">Single family</option>
+                  <option value="Condominium">Condo</option>
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="maxHoa">Max HOA / mo</label>
                 <input
-                  id="excludeRanch"
-                  type="checkbox"
-                  checked={filters.excludeRanch}
-                  onChange={(e) => updateField("excludeRanch", e.target.checked)}
+                  id="maxHoa"
+                  type="number"
+                  min="0"
+                  max="20000"
+                  step="10"
+                  value={filters.maxHoa}
+                  onChange={(e) => updateField("maxHoa", e.target.value)}
+                  placeholder="Any"
                 />
-                Exclude ranch-style homes
-              </label>
+              </div>
+
+              <div className="field field--full">
+                <label htmlFor="stories">Number of stories</label>
+                <select
+                  id="stories"
+                  value={filters.stories}
+                  onChange={(e) => updateField("stories", e.target.value)}
+                >
+                  <option value="any">Any</option>
+                  <option value="1">1 story (no stairs)</option>
+                  <option value="2plus">2+ stories</option>
+                </select>
+              </div>
+
+              <div className="field field--full field--checkbox">
+                <label htmlFor="excludeRanch" className="checkbox-label">
+                  <input
+                    id="excludeRanch"
+                    type="checkbox"
+                    checked={filters.excludeRanch}
+                    onChange={(e) => updateField("excludeRanch", e.target.checked)}
+                  />
+                  Exclude ranch-style homes
+                </label>
+              </div>
             </div>
-          </div>
           )}
 
           {searchMode !== "traditional" && (
