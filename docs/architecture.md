@@ -242,3 +242,111 @@ flowchart LR
 | 6 | **Data sensitivity** | Entirely synthetic — fictional addresses, fictional school names/ratings | No real PII or real-world claims at risk |
 | 7 | **`schools.db` is committed to the repo** | Same as `generated_listings.json` — synthetic, non-sensitive reference data, safe to commit | No secrets or real data stored in it |
 | 8 | **Traditional mode has a stronger privacy profile** | Never contacts Anthropic or OpenAI at all — confirmed structurally, not just by convention (`ListingsRouter` never imports `matching_service`) | A buyer using Traditional mode has a real, verifiable guarantee that their search criteria never leaves the server to a third party |
+
+---
+
+## 6. Proposed Enhancement — Semantic Retrieval Pre-Filter (Pinecone)
+
+**Status: design discussion only. Nothing in this section is implemented.**
+No Pinecone dependency, config, or code exists anywhere in this repo. This
+section exists so the idea isn't lost, and so a future session (or another
+developer) can pick it up without re-deriving the reasoning from scratch.
+
+### The problem this would solve
+
+Today, every listing that survives hard filtering gets sent to the LLM for
+full per-requirement reasoning (§4a) — for the `generated` dataset, that's
+up to 500 listings across ~64 batches. The README already documents this
+as a real, known cost/latency concern ("60+ calls per search... real
+latency and cost, unlike testing against 14 listings") and recommends hard
+filters as the mitigation. A semantic pre-filter would be a second lever,
+usable even in **AI-only mode**, where there are no hard filters to narrow
+anything.
+
+### Where it would sit
+
+A new stage between `listings_service.fetch_listings()` (hard filters) and
+`matching_service`'s batch scoring — narrowing the candidate pool by
+semantic similarity to the buyer's freeform preferences *before* the
+expensive, accurate-but-costly per-requirement LLM scoring runs, rather
+than replacing that scoring.
+
+```mermaid
+sequenceDiagram
+    actor Buyer
+    participant FE as Frontend
+    participant Router as MatchRouter
+    participant LS as listings_service
+    participant VS as vector_service (PROPOSED)
+    participant PC as Pinecone (PROPOSED)
+    participant MS as matching_service
+    participant AI as Claude / OpenAI
+
+    Buyer->>FE: Enter preferences, click "Find my matches"
+    FE->>Router: POST /match/start
+    Router->>LS: build_hard_filters(), fetch_listings(), normalize_listing()
+    LS-->>Router: hard-filtered candidates (e.g. 500)
+    Router->>VS: semantic_prefilter(preferences, candidates)
+    VS->>PC: embed(preferences), query top-K by similarity
+    PC-->>VS: top-K mls_ids (e.g. 75 of 500)
+    VS-->>Router: narrowed candidate list
+    Router->>MS: start_match_job(narrowed candidates)
+    Note over MS,AI: Unchanged from today — same batch-scoring<br/>pipeline, just fed a smaller, pre-filtered pool
+```
+
+A separate, offline/on-data-change indexing path would embed each
+listing's `description` (+ maybe a compact structured summary) and upsert
+it into Pinecone with `mls_id` as metadata — this runs once per dataset
+change, not per search, similar in spirit to how `seed_schools_db.py`
+already runs once per `schools.json` change rather than on every request.
+
+### Why this, specifically, over other options
+
+- **Doesn't touch the accuracy story.** The LLM still reads full listing
+  text and does the same honest, per-requirement `met: true/false`
+  judgment (§10) — Pinecone only decides *which* listings reach that
+  step, never scores anything itself. The "AI reads real listing text
+  instead of pattern-matching keywords" claim in §6 of the handoff
+  doesn't weaken.
+- **Composes with, doesn't replace, hard filters.** Filters + AI mode
+  would run hard filters first (as today), then semantic pre-filter the
+  survivors. AI-only mode — which today sends the entire dataset to the
+  LLM with zero narrowing — is where this would help most.
+- **Matches the existing warm-up-batch philosophy.** §9's warm-up batch
+  exists purely to make a search feel faster without changing what gets
+  scored; a semantic pre-filter is the same instinct applied earlier in
+  the pipeline, at real cost savings instead of just perceived latency.
+
+### Honest tradeoffs — why this isn't a clear "yes, build it"
+
+- **A third AI cost line.** An embedding call per listing at index time,
+  and one per search at query time — on top of Claude/OpenAI matching
+  cost, not instead of it.
+- **New external dependency.** A Pinecone account, index, and API key to
+  provision and keep secret, alongside Anthropic/OpenAI.
+- **The three data sources don't behave the same way here.** `generated`
+  (500, static) is the only source where pre-filtering meaningfully pays
+  off. `realistic` (14 listings) gains nothing — the whole point of that
+  dataset is being small and fixed for ground-truth testing (§13 of the
+  handoff's Tier 3 test). `live` (real SimplyRETS sandbox, content can
+  change day to day per the README) would need either per-request
+  embedding or a scheduled reindex job — real added complexity, not a
+  drop-in.
+- **Scale mismatch, honestly stated.** Vector retrieval earns its keep at
+  thousands+ of listings; at 500, a full-corpus LLM pass is slow-ish and
+  costs real money, but isn't actually broken. The genuine justification
+  is "this is the architecture you'd want if the real dataset were 10k+
+  listings" — a legitimate thing to demonstrate for a POC being
+  evaluated on architectural thinking, but worth stating plainly rather
+  than implying it solves an urgent problem at current scale.
+
+### If this moves forward
+
+A natural next step, still without writing code, would be sketching the
+`vector_service.py` interface (`index_listings()`, `semantic_prefilter()`)
+and deciding the top-K cutoff and embedding model as their own explicit
+decisions — the same "verify claims against real data before implementing"
+pattern already established for this project (handoff §20), applied to
+measuring actual score-quality impact of pre-filtering before committing
+to a K value, the same way `analyze_scores.py` measures real distributions
+before `SCORE_THRESHOLD` gets set.
