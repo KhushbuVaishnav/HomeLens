@@ -1,10 +1,4 @@
-# Real Estate Matcher — SQLite variant
-
-> **This is a separate, isolated copy** of the main project, built to test
-> moving school ratings from a JSON file to a real SQLite database without
-> risking the original working app. Everything is identical to the main
-> project except school-ratings storage — see the "This is the SQLite
-> variant" note under **Schools** below for exactly what changed.
+# HomeLens
 
 Search single-family/condo listings with structured filters (price, beds,
 schools, HOA, accessibility), then have AI re-rank results by reading each
@@ -13,7 +7,7 @@ listing's actual description against your freeform preferences.
 ## Project structure
 
 ```
-real-estate-matcher/
+HomeLens/
 ├── app/
 │   ├── main.py              # FastAPI app assembly — run this with uvicorn
 │   ├── config.py             # Settings, all driven by .env — no editing code to change behavior

@@ -1,4 +1,4 @@
-# Real Estate Matcher — SQLite Variant — Architecture Document
+# HomeLens — SQLite Variant — Architecture Document
 
 **Scope:** covers the SQLite variant — school ratings in a real SQLite
 database (`app/data/schools.db`) instead of `schools.json` — against the
@@ -25,7 +25,7 @@ flowchart LR
     Claude([Claude<br/>Anthropic API])
     OpenAI([GPT<br/>OpenAI API])
 
-    subgraph System["Real Estate Matcher — generated dataset, 500+ listings"]
+    subgraph System["HomeLens — generated dataset, 500+ listings"]
         UC1(Traditional search<br/>filters only, zero AI)
         UC2(Filters + AI search<br/>hard filters narrow the pool,<br/>then AI scores what's left)
         UC3(AI-only search<br/>pure natural language,<br/>zero hard filters)

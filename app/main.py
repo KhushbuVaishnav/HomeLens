@@ -17,7 +17,7 @@ from app.routers import listings, match
 settings.validate()  # fail fast on misconfiguration (bad DATA_SOURCE, missing API key, etc.)
 
 app = FastAPI(
-    title="Real Estate Matcher API",
+    title="HomeLens API",
     description="Search listings with hard filters, then re-rank with AI based on freeform preferences.",
     version="0.2.0",
 )
