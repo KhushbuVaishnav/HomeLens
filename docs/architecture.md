@@ -408,6 +408,22 @@ exactly as already happens for Tier 3.
 
 ### How it runs
 
+**Implementation note:** the judge payload is supposed to carry each
+listing's itemized `requirements` breakdown (`[{"text": ..., "met":
+bool}, ...]`) alongside the free-text `reason`, not just the reason
+alone — that's what actually lets the judge (and a human, in `--review`)
+check a specific claim against specific evidence instead of evaluating a
+one-sentence summary. This didn't work correctly at first:
+`_compute_deterministic_scores()` in `matching_service.py` computed
+`requirements_total`/`requirements_met` *counts* from the itemized list
+but never included the list itself in what `score_batch()` returns, so
+`_build_judge_payload()`'s `verdict.get("requirements", [])` was silently
+always `[]`. Fixed by adding the `requirements` key to that return value —
+purely additive, since `_merge_and_rank()` (the live app's own consumer of
+`score_batch`) only reads specific keys it already expects and ignores
+anything extra, so this couldn't affect real search results even before
+being caught.
+
 ```mermaid
 sequenceDiagram
     actor Dev
@@ -505,3 +521,33 @@ actively reviewing anything.
 every disagreement — appropriate for a deliberate review session, actively
 wrong for an unattended or scripted run (e.g. inside a larger automated
 check), which would just hang waiting for keyboard input that never comes.
+
+**The review prompt shows real evidence, not just a summary.** Each
+review displays the listing's actual `description` text and the itemized
+per-requirement breakdown (`requirement text: MET/NOT MET`) — a human
+can't meaningfully judge "was this verdict right" from either model's
+own one-sentence account of itself; they need the same source material
+and the same granular claims the models were actually working from.
+
+**The same evidence problem existed outside `--review` too, and is fixed
+the same way.** Even without `--review`, the plain scrolling
+`[AGREE]`/`[DISAGREE]` terminal output only ever printed the judge's
+one-sentence summary — never the itemized breakdown — which meant a
+person just watching a normal run couldn't independently verify anything
+either, only read the judge's own account of its verdict. Fixed by
+printing a `requirements:` line directly under every `[AGREE]`/
+`[DISAGREE]` line, and by writing every listing's full detail (query,
+address, real description, requirements breakdown, judge verdict) to
+`scripts/llm_judge_output.csv` on every run — same reasoning as
+`analyze_scores.py`'s CSV export: scrolling text doesn't scale as a
+review tool past a handful of listings, a spreadsheet does.
+
+**`--spot-check-agrees N` — reviewing agreement, not just disagreement.**
+`[DISAGREE]` isn't the only thing worth a second look: if the scorer and
+judge share the same blind spot, they'll agree confidently while both
+being wrong, and a disagreement-only review structurally can never catch
+that — nothing about a shared-blind-spot agreement ever looks unusual
+from the tool's own output. `--spot-check-agrees N` pulls every Nth
+`[AGREE]` into the exact same interactive review as a real disagreement.
+Off by default (no behavior change unless explicitly set), and only takes
+effect together with `--review`.

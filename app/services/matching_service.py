@@ -461,6 +461,14 @@ def _compute_deterministic_scores(raw_items: list[dict]) -> list[dict]:
             "reason": item.get("reason", ""),
             "requirements_total": total,
             "requirements_met": met,
+            "requirements": reqs,  # the itemized [{"text": ..., "met": bool}, ...] breakdown
+            # itself, not just its counts — added so callers that need the
+            # per-requirement detail (llm_judge.py's judge payload) can get
+            # it directly from score_batch's own return value, instead of
+            # re-deriving or re-requesting it. Purely additive: nothing
+            # downstream reads this key today (_merge_and_rank only pulls
+            # score/reason/requirements_total/requirements_met), so this
+            # can't change any existing behavior.
         })
     return results
 

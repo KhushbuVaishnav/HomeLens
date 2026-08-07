@@ -269,6 +269,18 @@ disagreed with, worth a human look — a `[DISAGREE]` line is a
 prioritization signal, not proof of an error. You still make the final
 call, the same way you already do for the `--with-ai` ground truth above.
 
+Every `[AGREE]`/`[DISAGREE]` line prints a `requirements:` line right
+underneath it — the actual itemized `requirement text: MET/NOT MET`
+breakdown, not just either model's one-sentence summary of itself. A
+summary alone ("all verdicts are supported...") isn't something you can
+independently verify against; the itemized breakdown is. Every run also
+writes `scripts/llm_judge_output.csv` — every listing, every query, the
+listing's real description, the full requirements breakdown, and the
+judge's verdict, all in one row. Same reasoning as `analyze_scores.py`'s
+CSV export: scrolling terminal text is a poor tool for reviewing more
+than a handful of listings; a spreadsheet gives you sortable, filterable,
+non-truncated columns instead.
+
 Both `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` need to be set in `.env`
 regardless of which one `AI_PROVIDER` points to, since the judge always
 needs the other one — the script checks this up front and tells you
@@ -307,6 +319,25 @@ realistically improves is the *frequency* of disagreements needing your
 attention, not the review disappearing. `--review` is opt-in specifically
 because it blocks on keyboard input after every disagreement — leave it
 off for an unattended run.
+
+The review prompt shows the listing's actual description and the scorer's
+itemized per-requirement breakdown (`requirement text: MET/NOT MET`), not
+just a one-sentence summary — you need the same source material the
+models had to meaningfully judge a verdict, not just their own account of
+it.
+
+**Agreement isn't proof of correctness — `--spot-check-agrees`:**
+
+```bash
+python scripts/llm_judge.py --review --spot-check-agrees 5
+```
+
+`[DISAGREE]` isn't the only thing worth a second look. If the scorer and
+judge share the same blind spot, they'll agree confidently while both
+being wrong — and a disagreement-only review would never catch that,
+since nothing ever flags it. `--spot-check-agrees N` pulls every Nth
+`[AGREE]` into the same review flow as a real disagreement. Off by
+default; only takes effect together with `--review`.
 
 ## Moving to real MLS data
 

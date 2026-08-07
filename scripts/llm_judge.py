@@ -37,6 +37,7 @@ Run:
 """
 
 import argparse
+import csv
 import json
 import random
 import sys
@@ -129,12 +130,26 @@ def _format_few_shot_block(feedback: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _interactive_review(preferences: str, listing: dict, judge_result: dict, scorer_reason: str) -> dict | None:
+def _interactive_review(preferences: str, listing: dict, judge_result: dict, scorer_reason: str, scorer_requirements: list[dict]) -> dict | None:
     """Prompts the person running the script to say who was actually
-    right about ONE disagreement, right after it's printed. Returns a
-    feedback entry to append to judge_feedback.json, or None if skipped.
-    Only called when --review is passed — this is interactive and blocks
-    on stdin, so it must never run during an unattended/automated pass."""
+    right about ONE verdict, right after it's printed. Returns a feedback
+    entry to append to judge_feedback.json, or None if skipped. Only
+    called when --review is passed — this is interactive and blocks on
+    stdin, so it must never run during an unattended/automated pass.
+
+    Shows the listing's actual description and the itemized per-requirement
+    breakdown, not just the free-text reason from either model — a human
+    can't meaningfully judge "was this verdict right" from a one-sentence
+    summary alone, they need the same source material (the listing's real
+    text) and the same granular claims (which specific requirement, met or
+    not) the scorer and judge were actually working from."""
+    print(f"\n    Listing description: {listing.get('description') or '(none)'}")
+    if scorer_requirements:
+        print("    Scorer's per-requirement breakdown:")
+        for r in scorer_requirements:
+            print(f"      - {r.get('text', '?')}: {'MET' if r.get('met') else 'NOT MET'}")
+    else:
+        print("    (Scorer returned no itemized requirements breakdown for this listing.)")
     print("    Who's actually right?")
     print("      [j] judge was right   [s] scorer was right   [b] both wrong   [enter] skip")
     choice = input("    > ").strip().lower()
@@ -255,15 +270,27 @@ def judge_batch(user_preferences: str, listings_batch: list[dict], verdicts_by_i
     return _judge_batch_anthropic(user_preferences, listings_batch, verdicts_by_id, few_shot_block)
 
 
-def run_judge(preferences: str, listings: list[dict], scoring_provider: str, judge_provider: str, few_shot_block: str = "", review: bool = False, new_feedback: list = None) -> dict:
+def _format_requirements(reqs: list[dict]) -> str:
+    """Compact one-line rendering of the itemized requirements breakdown,
+    for the terminal. E.g. "quiet street: MET | updated kitchen: NOT MET".
+    Used both in the scrolling [AGREE]/[DISAGREE] output and the CSV
+    export — this is the actual evidence a human needs to independently
+    verify a verdict, not just either model's own one-sentence summary
+    of itself."""
+    if not reqs:
+        return "(no itemized requirements returned)"
+    return " | ".join(f"{r.get('text', '?')}: {'MET' if r.get('met') else 'NOT MET'}" for r in reqs)
+
+
+def run_judge(preferences: str, listings: list[dict], scoring_provider: str, judge_provider: str, few_shot_block: str = "", review: bool = False, new_feedback: list = None, spot_check_agrees: int = None, csv_rows: list = None) -> dict:
     print(f"\n--- \"{preferences}\" ---")
     scoring_model = settings.ANTHROPIC_MODEL if scoring_provider == "anthropic" else settings.OPENAI_MODEL
     judge_model = settings.ANTHROPIC_MODEL if judge_provider == "anthropic" else settings.OPENAI_MODEL
     print(f"Scored by: {scoring_provider} ({scoring_model})")
     print(f"Judged by: {judge_provider} ({judge_model})")
 
-    # Index listings by mls_id up front — only needed when --review is on,
-    # to pass the full listing (for its address) to _interactive_review.
+    # Index listings by mls_id up front — needed by _interactive_review to
+    # show the listing's actual description, not just the address.
     listings_by_id = {str(l["mls_id"]): l for l in listings}
 
     # Score every listing first, same batching real searches use.
@@ -280,22 +307,54 @@ def run_judge(preferences: str, listings: list[dict], scoring_provider: str, jud
     disagreements = []
     agree_count = 0
     total = 0
+    agree_seen = 0  # counts AGREEs seen so far, for the spot_check_agrees cadence below
     for i in range(0, len(listings), settings.BATCH_SIZE):
         batch = listings[i:i + settings.BATCH_SIZE]
         for jr in judge_batch(preferences, batch, verdicts_by_id, judge_provider, few_shot_block):
             total += 1
             mls_id = str(jr.get("mls_id"))
             reason = jr.get("judge_reason", "")
+            scorer_verdict = verdicts_by_id.get(mls_id, {})
+            scorer_reason = scorer_verdict.get("reason", "")
+            scorer_requirements = scorer_verdict.get("requirements", [])
+            requirements_line = _format_requirements(scorer_requirements)
+            listing = listings_by_id.get(mls_id, {"mls_id": mls_id})
+
+            if csv_rows is not None:
+                csv_rows.append({
+                    "query": preferences,
+                    "mls_id": mls_id,
+                    "address": listing.get("address") or "Unknown",
+                    "description": listing.get("description") or "",
+                    "scorer_reason": scorer_reason,
+                    "scorer_requirements": requirements_line,
+                    "judge_agrees": jr.get("agrees", False),
+                    "judge_reason": reason,
+                })
+
             if jr.get("agrees"):
                 agree_count += 1
+                agree_seen += 1
                 print(f"  [AGREE]    {mls_id} — {reason}")
+                print(f"             requirements: {requirements_line}")
+                # Agreement is not proof of correctness — judge and scorer
+                # can share the exact same blind spot and agree while both
+                # being wrong, which a disagreement-only review would never
+                # surface. spot_check_agrees pulls every Nth AGREE into the
+                # same review flow as a genuine disagreement, specifically
+                # to give that failure mode a chance to be caught too.
+                if review and new_feedback is not None and spot_check_agrees and agree_seen % spot_check_agrees == 0:
+                    print("    (spot-check: reviewing this AGREE, not a disagreement)")
+                    entry = _interactive_review(preferences, listing, jr, scorer_reason, scorer_requirements)
+                    if entry:
+                        new_feedback.append(entry)
             else:
-                scorer_reason = verdicts_by_id.get(mls_id, {}).get("reason", "")
                 disagreements.append({"mls_id": mls_id, "judge_reason": reason, "scorer_reason": scorer_reason})
                 print(f"  [DISAGREE] {mls_id} — judge: {reason}")
+                print(f"             requirements: {requirements_line}")
                 print(f"             scorer said: {scorer_reason}")
                 if review and new_feedback is not None:
-                    entry = _interactive_review(preferences, listings_by_id.get(mls_id, {"mls_id": mls_id}), jr, scorer_reason)
+                    entry = _interactive_review(preferences, listing, jr, scorer_reason, scorer_requirements)
                     if entry:
                         new_feedback.append(entry)
 
@@ -322,6 +381,13 @@ def main():
              "scripts/judge_feedback.json. Opt-in and blocks on stdin — leave off for an unattended run. "
              "Past feedback (from any prior --review run) is always used as few-shot examples regardless "
              "of whether this flag is set now.",
+    )
+    parser.add_argument(
+        "--spot-check-agrees", type=int, default=None,
+        help="With --review, also interactively review every Nth [AGREE] (not just every [DISAGREE]). "
+             "Judge and scorer agreeing is not proof either is correct — they can share the exact same "
+             "blind spot and agree while both being wrong, which disagreement-only review would never "
+             "surface. Off by default (agrees are never spot-checked unless this is set).",
     )
     args = parser.parse_args()
 
@@ -372,8 +438,9 @@ def main():
         print("--review is on: you'll be asked to weigh in on every disagreement below.\n")
 
     new_feedback = []
+    csv_rows = []
     all_results = [
-        run_judge(q, listings, scoring_provider, judge_provider, few_shot_block, args.review, new_feedback)
+        run_judge(q, listings, scoring_provider, judge_provider, few_shot_block, args.review, new_feedback, args.spot_check_agrees, csv_rows)
         for q in queries
     ]
 
@@ -394,6 +461,26 @@ def main():
         _save_feedback(existing_feedback + new_feedback)
         print(f"\nSaved {len(new_feedback)} new correction(s) to {FEEDBACK_PATH.name} "
               f"({len(existing_feedback) + len(new_feedback)} total) — used as few-shot examples on future runs.")
+
+    # CSV export — the terminal already prints the requirements breakdown
+    # under every [AGREE]/[DISAGREE] line, but scrolling text is a poor
+    # tool for actually reviewing more than a handful of listings. Same
+    # reasoning as analyze_scores.py's CSV export: a spreadsheet gives you
+    # sortable, filterable, non-truncated columns to independently verify
+    # accuracy against — the address, the listing's real description, the
+    # scorer's per-requirement breakdown, and the judge's verdict, all in
+    # one row per listing per query.
+    if csv_rows:
+        csv_path = Path(__file__).resolve().parent / "llm_judge_output.csv"
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                "query", "mls_id", "address", "description",
+                "scorer_reason", "scorer_requirements", "judge_agrees", "judge_reason",
+            ])
+            writer.writeheader()
+            writer.writerows(csv_rows)
+        print(f"\nFull results (every listing, every query, requirements included) written to: {csv_path}")
+
     print(f"{'=' * 70}")
 
 
