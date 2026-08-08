@@ -11,7 +11,7 @@ const { useState, useRef, useEffect } = React;
 // still work fine on Render and on localhost — it just won't have a real
 // GCP backend to route to yet if the frontend itself is ever loaded from
 // a .run.app URL.
-const GCP_BACKEND = "https://REPLACE-ME-homelens-api.a.run.app";
+const GCP_BACKEND = "https://homelens-550088102949.europe-west1.run.app";
 const RENDER_BACKEND = "https://homelens-backend-dvve.onrender.com";
 
 const API_BASE = (() => {
