@@ -100,11 +100,20 @@ button {
 }
 
 .title-block__mark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-family: var(--font-display);
   font-weight: 700;
   font-size: 22px;
   letter-spacing: 0.02em;
   color: var(--paper);
+}
+
+.title-block__icon {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
 }
 
 .title-block__scope-note {
@@ -122,7 +131,22 @@ button {
   align-self: stretch;
 }
 
-.title-block__mark span {
+.title-block__text {
+  /* One inline unit, deliberately NOT a flex child that gets split further —
+     .title-block__mark's flex `gap` applies between every direct flex item,
+     and raw text mixed with elements inside a flex container gets wrapped
+     in anonymous flex items too. Without this wrapper, gap was landing
+     between "Home" and "Lens", and between "lens" and "!", not just
+     between the icon and the text as intended. */
+  display: inline;
+}
+
+.title-block__brand-accent {
+  color: var(--blueprint);
+  text-transform: uppercase;
+}
+
+.title-block__tagline-accent {
   color: var(--blueprint);
 }
 

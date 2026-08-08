@@ -120,8 +120,14 @@ def _format_few_shot_block(feedback: list[dict]) -> str:
     recent = feedback[-MAX_FEW_SHOT_EXAMPLES:]
     lines = ["Human-reviewed examples from past runs — learn from these:"]
     for entry in recent:
+        # .get(), not [] — entries saved before scorer_requirements was
+        # added to this function's output (see _interactive_review) won't
+        # have this key. Old entries still work, just without this detail.
+        requirements = entry.get("scorer_requirements", [])
+        requirements_line = f" Scorer's requirements: {_format_requirements(requirements)}." if requirements else ""
         lines.append(
-            f'- Query: "{entry["query"]}" — {entry.get("address", "listing")}: '
+            f'- Query: "{entry["query"]}" — {entry.get("address", "listing")}:'
+            f'{requirements_line} '
             f'judge said agrees={entry["judge_verdict"]["agrees"]} '
             f'("{entry["judge_verdict"]["reason"]}"). '
             f'Human determined: {entry["human_verdict"]}.'
@@ -167,6 +173,10 @@ def _interactive_review(preferences: str, listing: dict, judge_result: dict, sco
         "address": listing.get("address") or "Unknown",
         "judge_verdict": {"agrees": judge_result.get("agrees", False), "reason": judge_result.get("judge_reason", "")},
         "scorer_reason": scorer_reason,
+        "scorer_requirements": scorer_requirements,  # the itemized breakdown shown above — was
+        # displayed to the human making this call but previously never actually saved, meaning
+        # every future few-shot example built from it would silently drop the exact structured
+        # evidence (which requirement, met or not) the human's decision was actually based on.
         "human_verdict": human_verdict,
         "human_note": note or None,
     }

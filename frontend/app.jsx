@@ -1,12 +1,32 @@
 const { useState, useRef, useEffect } = React;
 
-// Point this at wherever your FastAPI backend is running.
-// Auto-detects local dev vs deployed. Locally, talks to your local
-// backend. When deployed, talks to your real Render backend below.
-const API_BASE =
-  window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
-    ? "http://127.0.0.1:8000"
-    : "https://homelens-backend-dvve.onrender.com";
+// Point this at wherever your FastAPI backend is running. Picks the right
+// backend automatically based on which platform THIS frontend is being
+// served from — so the same file works whether it's deployed to Render
+// or to GCP Cloud Run, without needing two separate builds.
+//
+// *** REPLACE THIS with your real Cloud Run backend URL once deployed ***
+// (it's printed by `gcloud run deploy` when you deploy app/, or find it
+// via `gcloud run services list`). Until you fill this in, the app will
+// still work fine on Render and on localhost — it just won't have a real
+// GCP backend to route to yet if the frontend itself is ever loaded from
+// a .run.app URL.
+const GCP_BACKEND = "https://REPLACE-ME-homelens-api.a.run.app";
+const RENDER_BACKEND = "https://homelens-backend-dvve.onrender.com";
+
+const API_BASE = (() => {
+  const hostname = window.location.hostname;
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return "http://127.0.0.1:8000";
+  }
+  if (hostname.endsWith(".run.app")) {
+    // Frontend itself is being served from Cloud Run -> use the GCP backend.
+    // (If you deploy the frontend to Firebase Hosting instead of Cloud Run,
+    // add a check for its domain here too -- e.g. hostname.endsWith(".web.app").)
+    return GCP_BACKEND;
+  }
+  return RENDER_BACKEND; // onrender.com, or anything else not matched above
+})();
 
 // Empty form input -> null (not sent as a filter), otherwise -> Number.
 // Used repeatedly below instead of repeating "value ? Number(value) : null" per field.
@@ -412,7 +432,16 @@ function App() {
     <React.Fragment>
       <header className="title-block">
         <div className="title-block__inner">
-          <div className="title-block__mark">Home<span>Lens</span> - AI that sees a home through your <span>lens</span>!</div>
+          <div className="title-block__mark">
+            <svg className="title-block__icon" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <path d="M4 15 L16 5 L28 15" fill="none" stroke="#5b9bff" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+              <rect x="7" y="15" width="17" height="10" fill="none" stroke="#5b9bff" strokeWidth="2" strokeLinejoin="round" />
+              <rect x="13.5" y="19" width="4" height="6" fill="none" stroke="#5b9bff" strokeWidth="1.5" />
+              <circle cx="23" cy="21" r="6" fill="#0f1626" stroke="#e0b93a" strokeWidth="2.2" />
+              <line x1="27.2" y1="25.2" x2="31" y2="29" stroke="#e0b93a" strokeWidth="2.5" strokeLinecap="round" />
+            </svg>
+            <span className="title-block__text">Home<span className="title-block__brand-accent">Lens</span> - AI that sees a home through your <span className="title-block__tagline-accent">lens</span>!</span>
+          </div>
           <div className="title-block__meta">
             <span className="title-block__control">
               <span className="title-block__control-row">

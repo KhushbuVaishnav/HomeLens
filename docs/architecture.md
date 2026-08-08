@@ -507,6 +507,19 @@ skip`, plus an optional one-line lesson — and the answer is appended to
 grows) get folded into `JUDGE_SYSTEM_PROMPT` as worked examples before the
 judge reviews anything new.
 
+**Bug, caught and fixed: the saved entry was missing the actual evidence.**
+`_interactive_review()` was shown the itemized `scorer_requirements`
+breakdown to help you decide — but never actually saved it into the
+returned entry, only the free-text `scorer_reason`. That meant every
+future few-shot example built from a correction would silently drop the
+exact structured detail (which requirement, met or not) the human
+decision was actually based on — the worked example would carry the
+verdict but not the evidence behind it. Fixed by adding
+`scorer_requirements` to the saved entry and threading it through
+`_format_few_shot_block()`'s output. Backward compatible: entries saved
+before this fix (missing the field) still format correctly via `.get()`,
+just without a requirements line, rather than crashing on an old file.
+
 **What this deliberately does not promise.** "So I don't have to review
 anymore" isn't an honest end-state to build toward — there's no version of
 this where a model self-corrects to zero errors without a human ever
