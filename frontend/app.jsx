@@ -9,7 +9,7 @@ const GCP_MAIN_BACKEND = "https://homelens-550088102949.europe-west1.run.app";
 
 // *** REPLACE THIS once the vertex-experiment project's backend is deployed ***
 // (printed by the deploy, or `gcloud run services list --project=YOUR_NEW_PROJECT_ID`)
-const GCP_VERTEX_TEST_BACKEND = https://homelens-vertex-846325187809.europe-west1.run.app";
+const GCP_VERTEX_TEST_BACKEND = "https://homelens-vertex-846325187809.europe-west1.run.app";
 
 const API_BASE = (() => {
   const hostname = window.location.hostname;
