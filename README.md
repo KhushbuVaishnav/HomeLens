@@ -263,15 +263,18 @@ python scripts/llm_judge.py --full-sweep --query "quiet street, walkable to Calt
 ```
 
 Has whichever provider you're **not** scoring with — `AI_PROVIDER` picks
-the scorer, `llm_judge.py` always uses the opposite one automatically —
-review `score_batch`'s real verdicts for whether each requirement judgment
-is actually supported by the listing's text. Not a replacement for the
-`--with-ai` test above, which is real hand-verified ground truth; a judge
-model isn't inherently more trustworthy than the model being judged, and
-if both share the same blind spot they'll agree while both being wrong.
-What it's for: **triage**. Instead of reading through every listing
-yourself, you get a shortlist of exactly which verdicts a second model
-disagreed with, worth a human look — a `[DISAGREE]` line is a
+the scorer, `llm_judge.py` picks the judge automatically using a fixed
+preference order (anthropic, then openai, then vertex — first one that
+isn't the scorer). Score with `anthropic`, judged by `openai` (same as
+before Vertex existed); score with `vertex`, judged by `anthropic` —
+review `score_batch`'s real verdicts for whether each requirement
+judgment is actually supported by the listing's text. Not a replacement
+for the `--with-ai` test above, which is real hand-verified ground truth;
+a judge model isn't inherently more trustworthy than the model being
+judged, and if both share the same blind spot they'll agree while both
+being wrong. What it's for: **triage**. Instead of reading through every
+listing yourself, you get a shortlist of exactly which verdicts a second
+model disagreed with, worth a human look — a `[DISAGREE]` line is a
 prioritization signal, not proof of an error. You still make the final
 call, the same way you already do for the `--with-ai` ground truth above.
 
@@ -287,10 +290,11 @@ CSV export: scrolling terminal text is a poor tool for reviewing more
 than a handful of listings; a spreadsheet gives you sortable, filterable,
 non-truncated columns instead.
 
-Both `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` need to be set in `.env`
-regardless of which one `AI_PROVIDER` points to, since the judge always
-needs the other one — the script checks this up front and tells you
-exactly what's missing rather than failing partway through a run.
+Whatever the judge provider turns out to be needs its credentials
+available — `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in `.env` for those two,
+or working Application Default Credentials plus `GCP_PROJECT_ID` for
+Vertex — the script checks this up front and tells you exactly what's
+missing rather than failing partway through a run.
 
 Judging happens in the same `BATCH_SIZE`-sized batches scoring already
 uses, not one call per listing — reviewing N listings costs `ceil(N/8)`

@@ -186,8 +186,36 @@ def _opposite_provider(provider: str) -> str:
     """Whichever provider ISN'T the one that produced the scores being
     judged. Self-review from the same model risks sharing the exact blind
     spots it's supposed to be checking for — see README for why this
-    matters more than it might seem."""
-    return "openai" if provider == "anthropic" else "anthropic"
+    matters more than it might seem.
+
+    With three providers now (not the original two), "opposite" needs an
+    explicit tie-break rule instead of a simple swap — there are two
+    candidates to choose between, not one. Fixed preference order:
+    anthropic, then openai, then vertex; pick the first one that isn't
+    the scoring provider itself. This preserves the exact original
+    anthropic<->openai behavior when only those two are in play, and
+    gives vertex a sensible, deterministic judge (anthropic) rather than
+    never being selectable as a judge at all — the bug this replaced."""
+    preference_order = ("anthropic", "openai", "vertex")
+    for candidate in preference_order:
+        if candidate != provider:
+            return candidate
+    return provider  # unreachable unless VALID_AI_PROVIDERS shrinks to one
+
+
+def _model_for_provider(provider: str) -> str:
+    """The configured model name for whichever provider this is — used
+    only for the human-readable "Scored by: X (model)" print lines.
+    A plain if/elif here on purpose, not a two-way ternary — a ternary is
+    exactly what caused this to silently mislabel Vertex as OpenAI's
+    model (gpt-5.6-luna) before, since it only ever checked for
+    "anthropic" and fell through to OpenAI's model name for anything
+    else, including vertex."""
+    if provider == "anthropic":
+        return settings.ANTHROPIC_MODEL
+    if provider == "openai":
+        return settings.OPENAI_MODEL
+    return settings.VERTEX_MODEL
 
 
 def _build_judge_payload(listings_batch: list[dict], verdicts_by_id: dict) -> list[dict]:
@@ -294,8 +322,8 @@ def _format_requirements(reqs: list[dict]) -> str:
 
 def run_judge(preferences: str, listings: list[dict], scoring_provider: str, judge_provider: str, few_shot_block: str = "", review: bool = False, new_feedback: list = None, spot_check_agrees: int = None, csv_rows: list = None, existing_feedback: list = None) -> dict:
     print(f"\n--- \"{preferences}\" ---")
-    scoring_model = settings.ANTHROPIC_MODEL if scoring_provider == "anthropic" else settings.OPENAI_MODEL
-    judge_model = settings.ANTHROPIC_MODEL if judge_provider == "anthropic" else settings.OPENAI_MODEL
+    scoring_model = _model_for_provider(scoring_provider)
+    judge_model = _model_for_provider(judge_provider)
     print(f"Scored by: {scoring_provider} ({scoring_model})")
     print(f"Judged by: {judge_provider} ({judge_model})")
 
