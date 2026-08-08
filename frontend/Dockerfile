@@ -8,7 +8,7 @@
 FROM python:3.12-slim
 
 WORKDIR /app
-COPY . .
+COPY frontend/ .
 
 # Cloud Run sets PORT itself (usually 8080) and requires the container to
 # listen on whatever value that is -- 8080 here is only the default for
