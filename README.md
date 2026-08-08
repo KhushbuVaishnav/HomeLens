@@ -197,8 +197,7 @@ runtime — nothing in the app ever writes to it after the seed script runs.
 It's built once, committed to the repo like `generated_listings.json`
 already is, and re-created fresh on every deploy. This is a different
 situation from a runtime cache or search history, which *would* break on
-a host that wipes local files on every restart/spin-down — see the main
-project's deployment notes for why that distinction matters.
+a host that wipes local files on every restart/spin-down.
 
 ## Tuning `SCORE_THRESHOLD`
 
