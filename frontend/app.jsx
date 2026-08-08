@@ -1,29 +1,31 @@
 const { useState, useRef, useEffect } = React;
 
 // Point this at wherever your FastAPI backend is running. Picks the right
-// backend automatically based on which platform THIS frontend is being
-// served from — so the same file works whether it's deployed to Render
-// or to GCP Cloud Run, without needing two separate builds.
-//
-// *** REPLACE THIS with your real Cloud Run backend URL once deployed ***
-// (it's printed by `gcloud run deploy` when you deploy app/, or find it
-// via `gcloud run services list`). Until you fill this in, the app will
-// still work fine on Render and on localhost — it just won't have a real
-// GCP backend to route to yet if the frontend itself is ever loaded from
-// a .run.app URL.
-const GCP_BACKEND = "https://homelens-550088102949.europe-west1.run.app";
+// backend automatically based on which platform/project THIS frontend is
+// being served from — same file, three possible deployments: Render, the
+// main GCP project, or the separate vertex-experiment GCP project.
 const RENDER_BACKEND = "https://homelens-backend-dvve.onrender.com";
+const GCP_MAIN_BACKEND = "https://homelens-550088102949.europe-west1.run.app";
+
+// *** REPLACE THIS once the vertex-experiment project's backend is deployed ***
+// (printed by the deploy, or `gcloud run services list --project=YOUR_NEW_PROJECT_ID`)
+const GCP_VERTEX_TEST_BACKEND = "https://REPLACE-ME-vertex-test-backend.a.run.app";
 
 const API_BASE = (() => {
   const hostname = window.location.hostname;
   if (hostname === "localhost" || hostname === "127.0.0.1") {
     return "http://127.0.0.1:8000";
   }
+  if (hostname.startsWith("homelens-frontend-550088102949")) {
+    // The main GCP project's frontend -> its own backend, same project.
+    return GCP_MAIN_BACKEND;
+  }
   if (hostname.endsWith(".run.app")) {
-    // Frontend itself is being served from Cloud Run -> use the GCP backend.
-    // (If you deploy the frontend to Firebase Hosting instead of Cloud Run,
-    // add a check for its domain here too -- e.g. hostname.endsWith(".web.app").)
-    return GCP_BACKEND;
+    // Any OTHER Cloud Run frontend -> assumed to be the separate
+    // vertex-experiment project (it'll have a different project number
+    // baked into its hostname automatically, since GCP project numbers
+    // are globally unique and appear in every Cloud Run URL it issues).
+    return GCP_VERTEX_TEST_BACKEND;
   }
   return RENDER_BACKEND; // onrender.com, or anything else not matched above
 })();
@@ -73,6 +75,7 @@ const DATA_SOURCE_NOTES = {
 const AI_PROVIDER_LABELS = {
   anthropic: "Claude",
   openai: "OpenAI",
+  vertex: "Gemini",
 };
 
 const DEFAULT_FILTERS = {

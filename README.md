@@ -82,11 +82,18 @@ side by side.
 **Permanent default** — change `.env`:
 ```
 DATA_SOURCE=realistic     # or: live, generated
-AI_PROVIDER=openai        # or: anthropic
+AI_PROVIDER=openai        # or: anthropic, vertex
 ```
 Restart `uvicorn` (or let `--reload` pick it up) after changing `.env`. This
 is what the header dropdowns default to on page load, and what any request
 uses if it doesn't specify an override.
+
+**`vertex` (Gemini) is set up differently from the other two** — no API
+key. It authenticates via Google Cloud's Application Default Credentials
+instead: locally, run `gcloud auth application-default login` once; on
+Cloud Run, grant the service's own service account the "Vertex AI User"
+IAM role (no secret to manage at all in that case). You also need
+`GCP_PROJECT_ID` set in `.env` — see `.env.example` for the full setup.
 
 **One practical gotcha when switching to `live`:** the City filter defaults
 to "Redwood City" (correct for `realistic`/`generated`, which are
