@@ -117,7 +117,7 @@ function MatchGauge({ score, isPartial }) {
   );
 }
 
-function ResultCard({ listing, isPartial }) {
+function ResultCard({ listing, isPartial, matchedByLabel }) {
   const [expanded, setExpanded] = useState(false);
   const price = listing.price
     ? `$${listing.price.toLocaleString()}`
@@ -203,7 +203,7 @@ function ResultCard({ listing, isPartial }) {
                 ))}
               </div>
             )}
-            <p className="result-card__expanded-label">Full description (verify Claude's quote against this directly)</p>
+            <p className="result-card__expanded-label">Full description (verify {matchedByLabel || "the AI"}'s quote against this directly)</p>
             <p className="result-card__expanded-description">{listing.description || "No description available."}</p>
 
             <div className="result-card__expanded-meta">
@@ -834,7 +834,7 @@ function App() {
               return (
                 <div className="result-grid">
                   {results.map((listing) => (
-                    <ResultCard key={listing.mls_id} listing={listing} />
+                    <ResultCard key={listing.mls_id} listing={listing} matchedByLabel={AI_PROVIDER_LABELS[selectedAiProvider] || selectedAiProvider} />
                   ))}
                 </div>
               );
@@ -866,7 +866,7 @@ function App() {
                 <h3 className="results-subheading">Full matches — every requirement met ({fullMatches.length})</h3>
                 <div className="result-grid">
                   {fullMatches.map((listing) => (
-                    <ResultCard key={listing.mls_id} listing={listing} />
+                    <ResultCard key={listing.mls_id} listing={listing} matchedByLabel={AI_PROVIDER_LABELS[selectedAiProvider] || selectedAiProvider} />
                   ))}
                 </div>
               </div>
@@ -876,7 +876,7 @@ function App() {
                 <h3 className="results-subheading results-subheading--partial">Partial matches — missing at least one requirement ({partialMatches.length})</h3>
                 <div className="result-grid">
                   {partialMatches.map((listing) => (
-                    <ResultCard key={listing.mls_id} listing={listing} isPartial />
+                    <ResultCard key={listing.mls_id} listing={listing} isPartial matchedByLabel={AI_PROVIDER_LABELS[selectedAiProvider] || selectedAiProvider} />
                   ))}
                 </div>
               </div>
