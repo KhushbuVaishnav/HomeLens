@@ -499,13 +499,29 @@ No model weights change — there's no access path to that for either
 provider (see the RL discussion this grew out of). What happens instead:
 when `--review` is passed, every `[DISAGREE]` prompts you interactively —
 `[j] judge was right / [s] scorer was right / [b] both wrong / [enter]
-skip`, plus an optional one-line lesson — and the answer is appended to
-`scripts/judge_feedback.json`. On every subsequent run (with or without
-`--review` — the flag only controls whether NEW corrections get collected
-*this* run), the most recent corrections (capped at
-`MAX_FEW_SHOT_EXAMPLES = 8`, to keep prompt size bounded as the file
-grows) get folded into `JUDGE_SYSTEM_PROMPT` as worked examples before the
-judge reviews anything new.
+skip`, plus an optional one-line lesson — and the answer is saved to
+`scripts/judge_feedback.json` **immediately**, right after you answer —
+not batched until the script finishes every query. On every subsequent
+run (with or without `--review` — the flag only controls whether NEW
+corrections get collected *this* run), the most recent corrections
+(capped at `MAX_FEW_SHOT_EXAMPLES = 8`, to keep prompt size bounded as the
+file grows) get folded into `JUDGE_SYSTEM_PROMPT` as worked examples
+before the judge reviews anything new.
+
+**Bug, caught and fixed: saving was deferred to the very end of the whole
+run, not per-review.** The original design collected every correction in
+memory and wrote them all in one `_save_feedback()` call after every query
+finished — for the default 3-query scope, that could be dozens of
+listings later. Two real consequences: checking `judge_feedback.json`
+while the script was still running showed stale data (looked like your
+review hadn't been saved at all, when really it just hadn't been written
+yet), and interrupting the script — Ctrl+C, a crash, closing the terminal
+— before it reached the end lost every correction from that entire run,
+not just whatever was in flight. Fixed by saving after every single
+review completes, inside `run_judge()` itself, using the same
+`existing_feedback + new_feedback` merge either way — at most one review
+can now ever be at risk of not being on disk yet, never a whole run's
+worth.
 
 **Bug, caught and fixed: the saved entry was missing the actual evidence.**
 `_interactive_review()` was shown the itemized `scorer_requirements`

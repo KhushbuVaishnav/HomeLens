@@ -7,3 +7,7 @@ venv/
 plantuml-1.2025.10.jar
 .vscode/
 diagrams/
+
+# Disposable -- fully overwritten every run, no value in version history
+scripts/llm_judge_output.csv
+scripts/analyze_scores_output.csv

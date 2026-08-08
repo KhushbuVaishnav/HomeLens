@@ -1,0 +1,28 @@
+[
+  {
+    "query": "quiet street, updated kitchen, home office space",
+    "mls_id": "3000478",
+    "address": "37730 Jefferson Rd",
+    "judge_verdict": {
+      "agrees": false,
+      "reason": "The 'Updated kitchen' verdict is marked false, but the listing describes a 'Chef's kitchen with custom cabinetry and a farmhouse sink,' which constitutes an updated/upgraded kitchen and should be marked true."
+    },
+    "scorer_reason": "The home sits on a peaceful cul-de-sac away from busy roads, but the kitchen is only described as a chef's kitchen rather than updated and the listing states there is no dedicated office space.",
+    "scorer_requirements": [
+      {
+        "text": "Quiet street",
+        "met": true
+      },
+      {
+        "text": "Updated kitchen",
+        "met": false
+      },
+      {
+        "text": "Home office space",
+        "met": false
+      }
+    ],
+    "human_verdict": "judge_right",
+    "human_note": "Need additional data to understand what chef's kitchen constitutes vs standard kitchen and same for farmhouse sink. But based on the general assumption that chef's have more specific elite ways to cook, their kitchen would have the right utensils etc, we can consider the kitchen is upgraded? But definitely need to confirm this with additiopnal data."
+  }
+]

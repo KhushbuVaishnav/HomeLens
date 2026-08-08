@@ -309,9 +309,12 @@ python scripts/llm_judge.py --review
 After each `[DISAGREE]`, asks interactively who was actually right —
 `[j]` judge / `[s]` scorer / `[b]` both wrong / `[enter]` skip — plus an
 optional one-line lesson, and saves your answer to
-`scripts/judge_feedback.json`. On every future run (with or without
-`--review` — the flag only controls whether *this* run collects new
-corrections), the most recent corrections get folded into the judge's
+`scripts/judge_feedback.json` **immediately** — not deferred until the
+script finishes every query. Check the file mid-run and your review is
+already there; Ctrl+C or a crash loses at most whatever you were mid-way
+through answering, never the whole run. On every future run (with or
+without `--review` — the flag only controls whether *this* run collects
+new corrections), the most recent corrections get folded into the judge's
 prompt as worked examples. This is few-shot learning from your
 corrections, not training — no model weights change, and there's no
 version of this where review stops being useful entirely. What

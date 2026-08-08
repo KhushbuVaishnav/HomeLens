@@ -292,7 +292,7 @@ def _format_requirements(reqs: list[dict]) -> str:
     return " | ".join(f"{r.get('text', '?')}: {'MET' if r.get('met') else 'NOT MET'}" for r in reqs)
 
 
-def run_judge(preferences: str, listings: list[dict], scoring_provider: str, judge_provider: str, few_shot_block: str = "", review: bool = False, new_feedback: list = None, spot_check_agrees: int = None, csv_rows: list = None) -> dict:
+def run_judge(preferences: str, listings: list[dict], scoring_provider: str, judge_provider: str, few_shot_block: str = "", review: bool = False, new_feedback: list = None, spot_check_agrees: int = None, csv_rows: list = None, existing_feedback: list = None) -> dict:
     print(f"\n--- \"{preferences}\" ---")
     scoring_model = settings.ANTHROPIC_MODEL if scoring_provider == "anthropic" else settings.OPENAI_MODEL
     judge_model = settings.ANTHROPIC_MODEL if judge_provider == "anthropic" else settings.OPENAI_MODEL
@@ -358,6 +358,9 @@ def run_judge(preferences: str, listings: list[dict], scoring_provider: str, jud
                     entry = _interactive_review(preferences, listing, jr, scorer_reason, scorer_requirements)
                     if entry:
                         new_feedback.append(entry)
+                        if existing_feedback is not None:
+                            _save_feedback(existing_feedback + new_feedback)
+                            print(f"    (saved — {len(existing_feedback) + len(new_feedback)} correction(s) now in {FEEDBACK_PATH.name})")
             else:
                 disagreements.append({"mls_id": mls_id, "judge_reason": reason, "scorer_reason": scorer_reason})
                 print(f"  [DISAGREE] {mls_id} — judge: {reason}")
@@ -367,6 +370,20 @@ def run_judge(preferences: str, listings: list[dict], scoring_provider: str, jud
                     entry = _interactive_review(preferences, listing, jr, scorer_reason, scorer_requirements)
                     if entry:
                         new_feedback.append(entry)
+                        # Saved immediately, not batched to the end of main() —
+                        # a long run (or one you Ctrl+C out of, or check the
+                        # file mid-run to look at) must not lose or hide
+                        # corrections that already happened. Re-reads
+                        # existing_feedback + everything collected so far on
+                        # EVERY new entry, which is redundant I/O for a long
+                        # run, but judge_feedback.json is small (a handful of
+                        # KB even with hundreds of entries) and this only
+                        # happens right after a human just finished typing,
+                        # never in a hot loop — the redundancy costs nothing
+                        # real and buys real durability.
+                        if existing_feedback is not None:
+                            _save_feedback(existing_feedback + new_feedback)
+                            print(f"    (saved — {len(existing_feedback) + len(new_feedback)} correction(s) now in {FEEDBACK_PATH.name})")
 
     return {"total": total, "agree": agree_count, "disagree": len(disagreements), "disagreements": disagreements}
 
@@ -450,7 +467,7 @@ def main():
     new_feedback = []
     csv_rows = []
     all_results = [
-        run_judge(q, listings, scoring_provider, judge_provider, few_shot_block, args.review, new_feedback, args.spot_check_agrees, csv_rows)
+        run_judge(q, listings, scoring_provider, judge_provider, few_shot_block, args.review, new_feedback, args.spot_check_agrees, csv_rows, existing_feedback)
         for q in queries
     ]
 
@@ -468,8 +485,10 @@ def main():
         print("Remember: a disagreement means a second model reached a different conclusion,")
         print("not that the original scorer was wrong. You make the final call.")
     if new_feedback:
-        _save_feedback(existing_feedback + new_feedback)
-        print(f"\nSaved {len(new_feedback)} new correction(s) to {FEEDBACK_PATH.name} "
+        # Already saved incrementally in run_judge() after every single
+        # entry — not re-saved here, just reported. Redoing the write here
+        # too would be harmless (same data) but pointless.
+        print(f"\n{len(new_feedback)} new correction(s) saved to {FEEDBACK_PATH.name} as you went "
               f"({len(existing_feedback) + len(new_feedback)} total) — used as few-shot examples on future runs.")
 
     # CSV export — the terminal already prints the requirements breakdown
