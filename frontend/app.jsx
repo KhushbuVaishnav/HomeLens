@@ -36,6 +36,23 @@ function numOrNull(value) {
   return value ? Number(value) : null;
 }
 
+// Composes the retry-reason phrase for the in-progress-search banner from
+// the backend's {"rate limit": N, "connection error": N} breakdown.
+// Deliberately NOT hardcoded to "due to rate limits" -- retries can now
+// happen for either reason (see matching_service.py's _retry_with_backoff),
+// so a fixed label would sometimes just be wrong about why the search is
+// running slower than usual.
+function formatRetryReasons(reasons) {
+  const entries = Object.entries(reasons || {}).filter(([, count]) => count > 0);
+  if (entries.length === 0) return "due to rate limits"; // fallback only; shouldn't normally trigger if retryCount > 0
+  if (entries.length === 1) {
+    const [reason] = entries[0];
+    return `due to ${reason}s`; // "rate limit" -> "rate limits", "connection error" -> "connection errors"
+  }
+  const parts = entries.map(([reason, count]) => `${count} ${reason}${count === 1 ? "" : "s"}`);
+  return `(${parts.join(", ")})`;
+}
+
 const DATA_SOURCE_LABELS = {
   live: "SimplyRETS (Live, ~45 listings)",
   realistic: "Small Dataset (14 listings)", // not shown in the UI dropdown (filtered out) — kept for scripts/verify_test_cases.py and any direct API use
@@ -232,6 +249,7 @@ function App() {
   const [results, setResults] = useState([]);
   const [progress, setProgress] = useState({ completed: 0, total: 0, inFlight: 0 });
   const [retryCount, setRetryCount] = useState(0);
+  const [retryReasons, setRetryReasons] = useState({});
   const [failedBatches, setFailedBatches] = useState(0);
   const [wasCancelled, setWasCancelled] = useState(false);
   const abortControllerRef = useRef(null); // used for the quick /listings (Browse all) call
@@ -305,6 +323,7 @@ function App() {
     setResults([]);
     setProgress({ completed: 0, total: 0, inFlight: 0 });
     setRetryCount(0);
+    setRetryReasons({});
     setFailedBatches(0);
     setWasCancelled(false);
   }
@@ -323,6 +342,7 @@ function App() {
     setResults([]); // clear stale results from the previous search immediately
     setProgress({ completed: 0, total: 0, inFlight: 0 });
     setRetryCount(0);
+    setRetryReasons({});
     setFailedBatches(0);
     setWasCancelled(false);
 
@@ -407,6 +427,7 @@ function App() {
         const data = await res.json();
         setProgress({ completed: data.completed_batches, total: data.total_batches, inFlight: data.in_flight_count || 0 });
         setRetryCount(data.retry_count || 0);
+        setRetryReasons(data.retry_reasons || {});
         setFailedBatches(data.failed_batches || 0);
         setResults(data.matches || []); // progressive — updates every poll, not just at completion
 
@@ -794,7 +815,7 @@ function App() {
               </p>
               {retryCount > 0 && (
                 <p className="state-panel__retry-note">
-                  ⚠ {retryCount} {retryCount === 1 ? "retry" : "retries"} so far due to rate limits — still working, just a bit slower than usual.
+                  ⚠ {retryCount} {retryCount === 1 ? "retry" : "retries"} so far {formatRetryReasons(retryReasons)} — still working, just a bit slower than usual.
                 </p>
               )}
             </div>

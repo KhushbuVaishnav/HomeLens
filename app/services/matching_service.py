@@ -126,19 +126,32 @@ def _parse_response_text(text: str) -> list[dict]:
 
 def _retry_with_backoff(fn, max_attempts=4, base_delay=2.0, on_retry=None):
     """
-    Retries fn() on rate-limit errors with exponential backoff (2s, 4s, 8s...).
-    Rate limits (too many requests/tokens per minute) are expected, temporary
-    conditions — especially now that batches run concurrently
-    (MAX_CONCURRENT_BATCHES) — not a real failure, so retrying briefly is the
-    standard approach rather than immediately surfacing an error to the user.
-    Any other exception (auth, not-found, etc.) is raised immediately, since
-    those won't resolve by waiting. Shared by all three providers — Vertex's
-    google-genai SDK doesn't have a dedicated rate-limit exception class the
-    way anthropic/openai do, so its 429s are recognized by status code
-    instead (see below), not by exception type.
+    Retries fn() on rate-limit errors AND connection errors, with
+    exponential backoff (2s, 4s, 8s...). Rate limits (too many
+    requests/tokens per minute) are expected, temporary conditions —
+    especially now that batches run concurrently (MAX_CONCURRENT_BATCHES)
+    — not a real failure, so retrying briefly is the standard approach
+    rather than immediately surfacing an error to the user. Connection
+    errors (the request never reached the provider's servers at all —
+    distinct from a slow response, which is APITimeoutError, or a
+    rejected request, which is a 4xx) are just as often transient as a
+    rate limit — a brief network blip, or a burst of new connections
+    opening at once — so they get the same retry treatment instead of
+    failing the whole batch on the first hiccup. Any OTHER exception
+    (auth, not-found, etc.) is still raised immediately, since those
+    won't resolve by waiting.
 
-    on_retry(attempt, delay), if given, is called each time a retry is about
-    to happen — used by the job runner to surface "this is retrying" to the
+    Shared by all three providers — Vertex's google-genai SDK doesn't have
+    a dedicated rate-limit exception class the way anthropic/openai do,
+    so its 429s are recognized by status code instead (see below), not by
+    exception type. Connection-error retry is currently anthropic/openai
+    only — google-genai's transport-level connection failures don't
+    consistently surface as its APIError class the way status-coded
+    failures do, so they're not classified here yet.
+
+    on_retry(attempt, delay, reason), if given, is called each time a retry
+    is about to happen — reason is "rate limit" or "connection error".
+    Used by the job runner to surface "this is retrying, and why" to the
     frontend via the poll endpoint, not just as a terminal print.
     """
     import time
@@ -158,19 +171,23 @@ def _retry_with_backoff(fn, max_attempts=4, base_delay=2.0, on_retry=None):
         try:
             return fn()
         except Exception as e:
-            is_rate_limit = isinstance(e, (anthropic.RateLimitError, openai.RateLimitError))
-            if not is_rate_limit and genai_errors is not None:
+            is_retryable = isinstance(e, (
+                anthropic.RateLimitError, openai.RateLimitError,
+                anthropic.APIConnectionError, openai.APIConnectionError,
+            ))
+            if not is_retryable and genai_errors is not None:
                 # google-genai doesn't have its own dedicated RateLimitError
                 # class the way anthropic/openai do — a 429 surfaces as the
                 # same APIError every other status code does, distinguished
                 # only by its .code attribute.
-                is_rate_limit = isinstance(e, genai_errors.APIError) and getattr(e, "code", None) == 429
-            if not is_rate_limit or attempt == max_attempts - 1:
+                is_retryable = isinstance(e, genai_errors.APIError) and getattr(e, "code", None) == 429
+            if not is_retryable or attempt == max_attempts - 1:
                 raise
             delay = base_delay * (2 ** attempt)
-            print(f"[rate limit] Hit 429, retrying in {delay:.0f}s (attempt {attempt + 1}/{max_attempts})...")
+            reason = "connection error" if isinstance(e, (anthropic.APIConnectionError, openai.APIConnectionError)) else "rate limit"
+            print(f"[{reason}] Hit a retryable error, retrying in {delay:.0f}s (attempt {attempt + 1}/{max_attempts})...")
             if on_retry:
-                on_retry(attempt + 1, delay)
+                on_retry(attempt + 1, delay, reason)
             time.sleep(delay)
 
 
@@ -704,8 +721,11 @@ def start_match_job(user_preferences: str, listings: list[dict], ai_provider: st
         "completed_batches": 0,
         "failed_batches": 0,       # batches that errored out (e.g. timeout) — the search continues without them, doesn't abort
         "in_flight_count": 0,      # how many batches are actively running right now, at this instant
-        "retry_count": 0,          # cumulative retries triggered so far across the whole job
-        "job_lock": threading.Lock(),  # protects retry_count from concurrent batch threads
+        "retry_count": 0,          # cumulative retries triggered so far across the whole job, all reasons combined
+        "retry_reasons": {},       # {"rate limit": N, "connection error": N} -- lets the frontend say WHY, not just how many.
+        # Kept alongside retry_count (not replacing it) so nothing that
+        # already reads the plain total needs to change to keep working.
+        "job_lock": threading.Lock(),  # protects retry_count/retry_reasons from concurrent batch threads
     }
     with _jobs_lock:
         _jobs[job_id] = job
@@ -735,9 +755,10 @@ def _run_job(job_id: str, user_preferences: str, listings: list[dict], ai_provid
     batches = _build_batches(listings)
     batch_iter = iter(batches)
 
-    def on_retry(attempt, delay):
+    def on_retry(attempt, delay, reason):
         with job["job_lock"]:
             job["retry_count"] += 1
+            job["retry_reasons"][reason] = job["retry_reasons"].get(reason, 0) + 1
 
     def update_results_so_far():
         """Rebuilds job['results'] from whatever's been scored so far and
