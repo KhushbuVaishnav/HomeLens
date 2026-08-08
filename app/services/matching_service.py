@@ -459,6 +459,7 @@ def _score_batch_vertex(user_preferences: str, listings_batch: list[dict], on_re
     """
     from google import genai
     from google.genai import errors as genai_errors
+    from google.genai import types as genai_types
 
     if not settings.GCP_PROJECT_ID:
         raise MatchingError(
@@ -478,6 +479,19 @@ def _score_batch_vertex(user_preferences: str, listings_batch: list[dict], on_re
             # Gemini's SDK doesn't expose a separate system/user role split
             # the same way Anthropic/OpenAI do in this call shape — folded
             # into one prompt string instead, same content either way.
+            config=genai_types.GenerateContentConfig(
+                response_mime_type="application/json",
+                # Claude/OpenAI reliably return clean JSON from the prompt
+                # instruction alone ("Respond with ONLY a JSON array").
+                # Gemini needs this told explicitly, not just asked in the
+                # prompt — without it, Gemini can wrap its answer in
+                # explanatory text even when instructed not to, which
+                # silently breaks _parse_response_text (it just returns []
+                # and prints a parse-failure warning), meaning every
+                # listing in that batch gets skipped with no error raised
+                # anywhere — exactly the "runs fine, zero results" failure
+                # mode this was actually causing.
+            ),
         )
 
     try:
