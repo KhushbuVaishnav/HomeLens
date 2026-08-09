@@ -10,6 +10,7 @@ and easy to forget. Now it's one env var: AI_PROVIDER=anthropic|openai.
 
 import json
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from app.config import settings, VALID_AI_PROVIDERS
@@ -229,7 +230,9 @@ def _score_batch_anthropic(user_preferences: str, listings_batch: list[dict], on
         return raw.parse()
 
     try:
+        _call_start = time.perf_counter()
         response = _retry_with_backoff(call, on_retry=on_retry)
+        _elapsed = time.perf_counter() - _call_start
     except anthropic.RateLimitError as e:
         raise MatchingError(
             _CLIENT_MSG_TRANSIENT,
@@ -262,12 +265,12 @@ def _score_batch_anthropic(user_preferences: str, listings_batch: list[dict], on
     except anthropic.APIStatusError as e:
         raise MatchingError(*_humanize_anthropic_error(e)) from e
 
-    _log_token_usage("Anthropic", len(listings_batch), response.usage.input_tokens, response.usage.output_tokens)
+    _log_token_usage("Anthropic", len(listings_batch), response.usage.input_tokens, response.usage.output_tokens, _elapsed)
     _log_raw_output("Anthropic", listings_batch, response.content[0].text)
     return _parse_response_text(response.content[0].text)
 
 
-def _log_token_usage(provider: str, batch_size: int, input_tokens: int, output_tokens: int) -> None:
+def _log_token_usage(provider: str, batch_size: int, input_tokens: int, output_tokens: int, elapsed_seconds: float) -> None:
     """Prints EXACT token usage straight from the API response's own usage
     field — reliable even under concurrency, unlike trying to infer usage
     from the shared rate-limit 'remaining' headers (those reflect multiple
@@ -276,7 +279,8 @@ def _log_token_usage(provider: str, batch_size: int, input_tokens: int, output_t
     real cost)."""
     print(f"[{provider} usage] batch of {batch_size} listings — "
           f"input: {input_tokens} tokens, output: {output_tokens} tokens, "
-          f"total: {input_tokens + output_tokens} tokens")
+          f"total: {input_tokens + output_tokens} tokens — "
+          f"latency: {elapsed_seconds * 1000:.0f}ms")
 
 
 def _log_raw_output(provider: str, listings_batch: list[dict], raw_text: str) -> None:
@@ -384,7 +388,9 @@ def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_re
         return raw.parse()
 
     try:
+        _call_start = time.perf_counter()
         response = _retry_with_backoff(call, on_retry=on_retry)
+        _elapsed = time.perf_counter() - _call_start
     except openai.RateLimitError as e:
         raise MatchingError(
             _CLIENT_MSG_TRANSIENT,
@@ -417,7 +423,7 @@ def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_re
     except APIStatusError as e:
         raise MatchingError(*_humanize_openai_error(e)) from e
 
-    _log_token_usage("OpenAI", len(listings_batch), response.usage.prompt_tokens, response.usage.completion_tokens)
+    _log_token_usage("OpenAI", len(listings_batch), response.usage.prompt_tokens, response.usage.completion_tokens, _elapsed)
     _log_raw_output("OpenAI", listings_batch, response.choices[0].message.content)
     return _parse_response_text(response.choices[0].message.content)
 
