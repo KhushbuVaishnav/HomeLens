@@ -117,42 +117,87 @@ function MatchGauge({ score, isPartial }) {
   );
 }
 
-function ResultCard({ listing, isPartial, matchedByLabel }) {
+function ResultCard({ listing, isPartial, matchedByLabel, isTraditional = false }) {
   const [expanded, setExpanded] = useState(false);
+
   const price = listing.price
     ? `$${listing.price.toLocaleString()}`
     : "Price n/a";
+
   const hasMatchData = typeof listing.match_score === "number";
 
   return (
-    <div className={`result-card${isPartial ? " result-card--partial" : ""}`}>
-      {hasMatchData ? (
-        <MatchGauge score={listing.match_score} isPartial={isPartial} />
-      ) : (
-        <div className="match-gauge match-gauge--empty">
-          <span className="match-gauge__no-score">—</span>
-        </div>
+    <div
+      className={`result-card${isPartial ? " result-card--partial" : ""}${isTraditional ? " result-card--traditional" : ""}`}
+    >
+      {!isTraditional && (
+        hasMatchData ? (
+          <MatchGauge score={listing.match_score} isPartial={isPartial} />
+        ) : (
+          <div className="match-gauge match-gauge--empty">
+            <span className="match-gauge__no-score">—</span>
+          </div>
+        )
       )}
+
       <div className="result-card__body">
-        <p className="result-card__address">{listing.address || "Address unavailable"}</p>
-        <p className="result-card__location">{listing.city}{listing.city && listing.state ? ", " : ""}{listing.state}</p>
+        <p className="result-card__address">
+          {listing.address || "Address unavailable"}
+        </p>
+
+        <p className="result-card__location">
+          {listing.city}
+          {listing.city && listing.state ? ", " : ""}
+          {listing.state}
+        </p>
 
         <div className="spec-row">
-          <span className="spec-row__item"><strong>{price}</strong></span>
-          <span className="spec-row__item"><strong>{listing.beds ?? "—"}</strong> bd</span>
-          <span className="spec-row__item"><strong>{listing.baths ?? "—"}</strong> ba</span>
-          <span className="spec-row__item"><strong>{listing.sqft ? listing.sqft.toLocaleString() : "—"}</strong> sqft</span>
+          <span className="spec-row__item">
+            <strong>{price}</strong>
+          </span>
+
+          <span className="spec-row__item">
+            <strong>{listing.beds ?? "—"}</strong> bd
+          </span>
+
+          <span className="spec-row__item">
+            <strong>{listing.baths ?? "—"}</strong> ba
+          </span>
+
+          <span className="spec-row__item">
+            <strong>
+              {listing.sqft ? listing.sqft.toLocaleString() : "—"}
+            </strong>{" "}
+            sqft
+          </span>
+
           {listing.stories && (
-            <span className="spec-row__item"><strong>{listing.stories}</strong> {listing.stories === 1 ? "story" : "stories"}</span>
+            <span className="spec-row__item">
+              <strong>{listing.stories}</strong>{" "}
+              {listing.stories === 1 ? "story" : "stories"}
+            </span>
           )}
+
           {listing.style && (
-            <span className="spec-row__item"><strong>{listing.style}</strong></span>
+            <span className="spec-row__item">
+              <strong>{listing.style}</strong>
+            </span>
           )}
+
           {listing.property_type && (
-            <span className="spec-row__item"><strong>{listing.property_type === "Condominium" ? "Condo" : "Single family"}</strong></span>
+            <span className="spec-row__item">
+              <strong>
+                {listing.property_type === "Condominium"
+                  ? "Condo"
+                  : "Single family"}
+              </strong>
+            </span>
           )}
+
           {listing.hoa_fee ? (
-            <span className="spec-row__item">HOA <strong>${listing.hoa_fee}</strong>/mo</span>
+            <span className="spec-row__item">
+              HOA <strong>${listing.hoa_fee}</strong>/mo
+            </span>
           ) : null}
         </div>
 
@@ -176,20 +221,27 @@ function ResultCard({ listing, isPartial, matchedByLabel }) {
                 </span>
               )}
             </strong>
+
             {listing.match_reason}
           </div>
         )}
 
-        <button
-          type="button"
-          className="expand-toggle"
-          onClick={() => setExpanded((e) => !e)}
-        >
-          {expanded ? "Hide full listing details ▲" : "Verify — view full listing details ▼"}
-        </button>
+        {!isTraditional && (
+          <button
+            type="button"
+            className="expand-toggle"
+            onClick={() => setExpanded((e) => !e)}
+          >
+            {expanded
+              ? "Hide full listing details ▲"
+              : "Verify — view full listing details ▼"}
+          </button>
+        )}
 
-        {expanded && (
-          <div className="result-card__expanded">
+        {(isTraditional || expanded) && (
+          <div
+            className={`result-card__expanded${isTraditional ? " result-card__expanded--traditional" : ""}`}
+          >
             {listing.photos && listing.photos.length > 0 && (
               <div className="result-card__photos">
                 {listing.photos.map((url, i) => (
@@ -198,18 +250,37 @@ function ResultCard({ listing, isPartial, matchedByLabel }) {
                     src={url}
                     alt={`${listing.address || "Listing"} photo ${i + 1}`}
                     className="result-card__photo"
-                    onError={(e) => { e.target.style.display = "none"; }}
+                    onError={(e) => {
+                      e.target.style.display = "none";
+                    }}
                   />
                 ))}
               </div>
             )}
-            <p className="result-card__expanded-label">Full description (verify {matchedByLabel || "the AI"}'s quote against this directly)</p>
-            <p className="result-card__expanded-description">{listing.description || "No description available."}</p>
+
+            <p className="result-card__expanded-label">
+              {isTraditional
+                ? "Description"
+                : `Full description (verify ${matchedByLabel || "the AI"}'s quote against this directly)`}
+            </p>
+
+            <p className="result-card__expanded-description">
+              {listing.description || "No description available."}
+            </p>
 
             <div className="result-card__expanded-meta">
-              <span><strong>MLS ID:</strong> {listing.mls_id}</span>
-              <span><strong>Year built:</strong> {listing.year_built ?? "—"}</span>
-              <span><strong>Lot size:</strong> {listing.lot_size ? `${listing.lot_size} sqft` : "—"}</span>
+              <span>
+                <strong>MLS ID:</strong> {listing.mls_id}
+              </span>
+
+              <span>
+                <strong>Year built:</strong> {listing.year_built ?? "—"}
+              </span>
+
+              <span>
+                <strong>Lot size:</strong>{" "}
+                {listing.lot_size ? `${listing.lot_size} sqft` : "—"}
+              </span>
             </div>
           </div>
         )}
@@ -830,15 +901,24 @@ function App() {
             // Browse-all results have no requirements/score data at all —
             // just show them as one flat list in that case.
             const hasRequirementData = !skipAI && results.some((l) => typeof l.requirements_total === "number");
-            if (!hasRequirementData) {
-              return (
-                <div className="result-grid">
-                  {results.map((listing) => (
-                    <ResultCard key={listing.mls_id} listing={listing} matchedByLabel={AI_PROVIDER_LABELS[selectedAiProvider] || selectedAiProvider} />
-                  ))}
-                </div>
-              );
-            }
+if (!hasRequirementData) {
+  return (
+    <div className="result-grid">
+      {results.map((listing) => (
+        <ResultCard
+          key={listing.mls_id}
+          listing={listing}
+          isTraditional={skipAI}
+          matchedByLabel={
+            skipAI
+              ? null
+              : (AI_PROVIDER_LABELS[selectedAiProvider] || selectedAiProvider)
+          }
+        />
+      ))}
+    </div>
+  );
+}
 
             // Split into full vs. partial matches automatically — this is
             // deliberately NOT a user-configurable tolerance setting. Asking
