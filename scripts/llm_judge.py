@@ -41,6 +41,7 @@ import csv
 import json
 import random
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # so `import app.*` works when run as a script
@@ -257,8 +258,10 @@ def _judge_batch_anthropic(user_preferences: str, listings_batch: list[dict], ve
             messages=[{"role": "user", "content": user_message}],
         )
 
+    _call_start = time.perf_counter()
     response = _retry_with_backoff(call)
-    _log_token_usage("Anthropic (judge)", len(listings_batch), response.usage.input_tokens, response.usage.output_tokens)
+    _elapsed = time.perf_counter() - _call_start
+    _log_token_usage("Anthropic (judge)", len(listings_batch), response.usage.input_tokens, response.usage.output_tokens, _elapsed)
     _log_raw_output("Anthropic (judge)", listings_batch, response.content[0].text)
     return _parse_response_text(response.content[0].text)
 
@@ -296,8 +299,10 @@ def _judge_batch_openai(user_preferences: str, listings_batch: list[dict], verdi
             kwargs["temperature"] = settings.TEMPERATURE
         return client.chat.completions.create(**kwargs)
 
+    _call_start = time.perf_counter()
     response = _retry_with_backoff(call)
-    _log_token_usage("OpenAI (judge)", len(listings_batch), response.usage.prompt_tokens, response.usage.completion_tokens)
+    _elapsed = time.perf_counter() - _call_start
+    _log_token_usage("OpenAI (judge)", len(listings_batch), response.usage.prompt_tokens, response.usage.completion_tokens, _elapsed)
     _log_raw_output("OpenAI (judge)", listings_batch, response.choices[0].message.content)
     return _parse_response_text(response.choices[0].message.content)
 

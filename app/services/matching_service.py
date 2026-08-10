@@ -510,6 +510,13 @@ def _score_batch_vertex(user_preferences: str, listings_batch: list[dict], on_re
             # the same way Anthropic/OpenAI do in this call shape — folded
             # into one prompt string instead, same content either way.
             config=genai_types.GenerateContentConfig(
+                temperature=settings.TEMPERATURE,
+                # Matches Claude's temperature setting — same TEMPERATURE
+                # config value, same reasoning: lower temperature for more
+                # consistent, less creative scoring judgments. Previously
+                # unset here, meaning Gemini was silently running on
+                # whatever its own SDK default is, not the value actually
+                # configured for this app.
                 response_mime_type="application/json",
                 # Claude/OpenAI reliably return clean JSON from the prompt
                 # instruction alone ("Respond with ONLY a JSON array").
