@@ -634,6 +634,10 @@ button {
   gap: 20px;
 }
 
+.result-card--traditional {
+  grid-template-columns: 1fr;
+}
+
 .result-card--partial {
   border-left: 3px solid var(--warn);
 }
@@ -824,6 +828,13 @@ button {
   background: var(--ink);
   border: 1px dashed var(--line-bright);
   border-radius: var(--radius);
+}
+
+.result-card__expanded--traditional {
+  margin-top: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
 }
 
 .result-card__photos {
