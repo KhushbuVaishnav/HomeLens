@@ -22,6 +22,7 @@ flowchart LR
     Buyer([Home Buyer])
     Claude([Claude<br/>Anthropic API])
     OpenAI([GPT<br/>OpenAI API])
+    Gemini([Gemini<br/>Vertex AI])
 
     subgraph System["HomeLens — generated dataset, 500+ listings"]
         UC1(Traditional search<br/>filters only, zero AI)
@@ -46,6 +47,7 @@ flowchart LR
 
     UC7 --> Claude
     UC7 --> OpenAI
+    UC7 --> Gemini
 ```
 
 Traditional mode has no relationship to Cancel (UC4): it's a single, quick
@@ -69,6 +71,7 @@ flowchart TD
     SchoolsData[("schools.db<br/>SQLite, real SQL queries")]
     Anthropic{{"Anthropic API"}}
     OpenAI{{"OpenAI API"}}
+    Vertex{{"Vertex AI<br/>(Gemini)"}}
 
     Frontend -->|Traditional mode| ListingsRouter
     Frontend -->|"Filters+AI or AI-only mode"| MatchRouter
@@ -82,12 +85,13 @@ flowchart TD
     SchoolsService --> SchoolsData
     MatchingService --> Anthropic
     MatchingService --> OpenAI
+    MatchingService --> Vertex
 ```
 
 Both AI-using modes route through the same `MatchRouter`, differing only
 in which filter values get sent — AI-only always sends every filter as
 `null`. `ListingsRouter` never imports `matching_service`, so Traditional
-mode structurally cannot contact either AI provider.
+mode structurally cannot contact any AI provider.
 
 ---
 
@@ -103,6 +107,7 @@ flowchart TD
     EnvFile[[".env — secrets, gitignored"]]
     AnthropicCloud{{"Anthropic<br/>api.anthropic.com"}}
     OpenAICloud{{"OpenAI<br/>api.openai.com"}}
+    VertexCloud{{"Vertex AI<br/>(Gemini)"}}
 
     Browser -->|"HTTP GET<br/>page load"| FrontendServer
     Browser -->|"HTTP fetch/XHR<br/>/listings /match/start<br/>/match/{id} /cancel"| Backend
@@ -111,6 +116,7 @@ flowchart TD
     Backend --> EnvFile
     Backend -->|"HTTPS + key"| AnthropicCloud
     Backend -->|"HTTPS + key"| OpenAICloud
+    Backend -->|"HTTPS + Application<br/>Default Credentials<br/>(no static key)"| VertexCloud
 ```
 
 ---
@@ -127,7 +133,7 @@ sequenceDiagram
     participant Router as MatchRouter
     participant LS as listings_service
     participant MS as matching_service
-    participant AI as Claude / OpenAI
+    participant AI as Claude / OpenAI / Gemini
 
     Buyer->>FE: Enter preferences, click "Find my matches"
     FE->>Router: POST /match/start
@@ -209,6 +215,7 @@ flowchart LR
     subgraph External["External trusted providers"]
         Anthropic{{"Anthropic API"}}
         OpenAI{{"OpenAI API"}}
+        Vertex{{"Vertex AI<br/>(Gemini)"}}
     end
 
     Browser -->|HTTP| API
@@ -217,6 +224,7 @@ flowchart LR
     API --> Jobs
     API -->|"HTTPS + key<br/>(Filters+AI / AI-only modes only)"| Anthropic
     API -->|"HTTPS + key<br/>(Filters+AI / AI-only modes only)"| OpenAI
+    API -->|"HTTPS + ADC, no static key<br/>(Filters+AI / AI-only modes only)"| Vertex
 
     style Untrusted fill:#2a0f0f,stroke:#CC0000,stroke-width:2px
     style Trusted fill:#0f2412,stroke:#007700,stroke-width:2px
@@ -228,11 +236,12 @@ flowchart LR
 | 1 | No authentication on any endpoint | Zero auth code anywhere in `app/routers/` — anyone reaching the port can trigger real AI API costs or poll/cancel any job by guessing its UUID |
 | 2 | CORS defaults to `*` | `CORS_ALLOW_ORIGINS` in `config.py` — any website's JS could call this API from a visitor's browser unless set explicitly |
 | 3 | A secret in frontend code is not a real barrier | General principle — anyone can view it via browser DevTools and replay requests directly, bypassing the UI entirely |
-| 4 | Secrets handling | `.env` gitignored, never returned in responses, never logged (only usage counts) |
+| 4 | Secrets handling | `.env` gitignored, never returned in responses, never logged (only usage counts) — applies to `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` specifically; Vertex AI has no equivalent static secret to leak in the first place (see #9) |
 | 5 | Input validation | Every field validated by Pydantic (type, enum membership) — invalid input gets a clean 422 |
 | 6 | Data sensitivity | Entirely synthetic — fictional addresses, fictional school names/ratings, no real PII |
 | 7 | `schools.db` is committed to the repo | Synthetic, non-sensitive reference data, same category as `generated_listings.json` |
-| 8 | Traditional mode has a stronger privacy profile | Never contacts Anthropic or OpenAI — structurally guaranteed, since `ListingsRouter` never imports `matching_service` |
+| 8 | Traditional mode has a stronger privacy profile | Never contacts Anthropic, OpenAI, or Vertex AI — structurally guaranteed, since `ListingsRouter` never imports `matching_service` |
+| 9 | Vertex AI's auth model has no static secret at all | Authenticates via Google Cloud's Application Default Credentials (local `gcloud auth application-default login`, or the Cloud Run service's own identity in production) — nothing resembling `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` exists for this provider, so there's no equivalent key to leak, rotate, or accidentally commit |
 
 ---
 
@@ -392,12 +401,18 @@ sequenceDiagram
 ### Provider selection
 
 `AI_PROVIDER` in `.env` picks which provider does the real scoring, same
-as it always has. The judge always uses whichever provider that ISN'T —
-`anthropic` scored → `openai` judges, and vice versa — chosen
-automatically, never something configured separately. Both
-`ANTHROPIC_API_KEY` and `OPENAI_API_KEY` need to be set regardless of
-which one `AI_PROVIDER` points to; a missing judge key is reported before
-any call is made, not partway through a run.
+as it always has. The judge picks whichever provider ISN'T the one doing
+the scoring — with three providers now, not the original two, that needs
+an explicit tie-break rule rather than a simple swap: fixed preference
+order (anthropic, then openai, then vertex), first one that isn't the
+scoring provider. `anthropic` scored → `openai` judges (same as the
+original two-provider behavior); `vertex` scored → `anthropic` judges
+(deterministic, not incidental). Chosen automatically, never something
+configured separately. Whatever the judge provider turns out to be needs
+its credentials available — `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in
+`.env` for those two, or working Application Default Credentials plus
+`GCP_PROJECT_ID` for Vertex; a missing credential is reported before any
+call is made, not partway through a run.
 
 ### Batching
 

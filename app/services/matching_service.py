@@ -127,32 +127,67 @@ def _parse_response_text(text: str) -> list[dict]:
 
 def _retry_with_backoff(fn, max_attempts=4, base_delay=2.0, on_retry=None):
     """
-    Retries fn() on rate-limit errors with exponential backoff (2s, 4s, 8s...).
-    Rate limits (too many requests/tokens per minute) are expected, temporary
-    conditions — especially now that batches run concurrently
-    (MAX_CONCURRENT_BATCHES) — not a real failure, so retrying briefly is the
-    standard approach rather than immediately surfacing an error to the user.
-    Any other exception (auth, not-found, etc.) is raised immediately, since
-    those won't resolve by waiting.
+    Retries fn() on rate-limit errors AND connection errors, with
+    exponential backoff (2s, 4s, 8s...). Rate limits (too many
+    requests/tokens per minute) are expected, temporary conditions —
+    especially now that batches run concurrently (MAX_CONCURRENT_BATCHES)
+    — not a real failure, so retrying briefly is the standard approach
+    rather than immediately surfacing an error to the user. Connection
+    errors (the request never reached the provider's servers at all —
+    distinct from a slow response, which is APITimeoutError, or a
+    rejected request, which is a 4xx) are just as often transient as a
+    rate limit — a brief network blip, or a burst of new connections
+    opening at once — so they get the same retry treatment instead of
+    failing the whole batch on the first hiccup. Any OTHER exception
+    (auth, not-found, etc.) is still raised immediately, since those
+    won't resolve by waiting.
 
-    on_retry(attempt, delay), if given, is called each time a retry is about
-    to happen — used by the job runner to surface "this is retrying" to the
+    Shared by all three providers — Vertex's google-genai SDK doesn't have
+    a dedicated rate-limit exception class the way anthropic/openai do,
+    so its 429s are recognized by status code instead (see below), not by
+    exception type. Connection-error retry is currently anthropic/openai
+    only — google-genai's transport-level connection failures don't
+    consistently surface as its APIError class the way status-coded
+    failures do, so they're not classified here yet.
+
+    on_retry(attempt, delay, reason), if given, is called each time a retry
+    is about to happen — reason is "rate limit" or "connection error".
+    Used by the job runner to surface "this is retrying, and why" to the
     frontend via the poll endpoint, not just as a terminal print.
     """
-    import time
     import anthropic
     import openai
+    try:
+        from google.genai import errors as genai_errors
+    except ImportError:
+        # google-genai is an optional dependency — only needed if
+        # AI_PROVIDER=vertex is actually used. Someone who only ever uses
+        # Anthropic/OpenAI shouldn't need it installed at all; this
+        # function is shared by all three providers, so it can't assume
+        # it's present.
+        genai_errors = None
 
     for attempt in range(max_attempts):
         try:
             return fn()
-        except (anthropic.RateLimitError, openai.RateLimitError):
-            if attempt == max_attempts - 1:
+        except Exception as e:
+            is_retryable = isinstance(e, (
+                anthropic.RateLimitError, openai.RateLimitError,
+                anthropic.APIConnectionError, openai.APIConnectionError,
+            ))
+            if not is_retryable and genai_errors is not None:
+                # google-genai doesn't have its own dedicated RateLimitError
+                # class the way anthropic/openai do — a 429 surfaces as the
+                # same APIError every other status code does, distinguished
+                # only by its .code attribute.
+                is_retryable = isinstance(e, genai_errors.APIError) and getattr(e, "code", None) == 429
+            if not is_retryable or attempt == max_attempts - 1:
                 raise
             delay = base_delay * (2 ** attempt)
-            print(f"[rate limit] Hit 429, retrying in {delay:.0f}s (attempt {attempt + 1}/{max_attempts})...")
+            reason = "connection error" if isinstance(e, (anthropic.APIConnectionError, openai.APIConnectionError)) else "rate limit"
+            print(f"[{reason}] Hit a retryable error, retrying in {delay:.0f}s (attempt {attempt + 1}/{max_attempts})...")
             if on_retry:
-                on_retry(attempt + 1, delay)
+                on_retry(attempt + 1, delay, reason)
             time.sleep(delay)
 
 
@@ -276,7 +311,15 @@ def _log_token_usage(provider: str, batch_size: int, input_tokens: int, output_t
     from the shared rate-limit 'remaining' headers (those reflect multiple
     threads' calls interleaved against a bucket that's also continuously
     refilling, so they can't be cleanly subtracted to get a single call's
-    real cost)."""
+    real cost).
+
+    elapsed_seconds is measured around the WHOLE _retry_with_backoff(call)
+    span, not a single raw API attempt — if this batch hit a retry, that
+    backoff sleep time (2s, 4s, 8s...) is included in what's printed here.
+    Deliberately measured this way: "how long did it actually take to get
+    a usable result for this batch" is the number that matters for a real
+    P95 of what a search experiences, not an idealized single-attempt
+    number that hides how often retries actually happen in practice."""
     print(f"[{provider} usage] batch of {batch_size} listings — "
           f"input: {input_tokens} tokens, output: {output_tokens} tokens, "
           f"total: {input_tokens + output_tokens} tokens — "
@@ -428,6 +471,103 @@ def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_re
     return _parse_response_text(response.choices[0].message.content)
 
 
+def _score_batch_vertex(user_preferences: str, listings_batch: list[dict], on_retry=None) -> list[dict]:
+    """Vertex AI's Gemini, via the google-genai SDK's Vertex mode
+    (client = genai.Client(vertexai=True, ...)) — the current, non-deprecated
+    way to call it. The older `vertexai.generative_models.GenerativeModel`
+    class this project's own earlier drafts might reference is deprecated
+    as of mid-2025 and being fully removed; deliberately not used here.
+
+    Authentication is the real structural difference from the other two
+    providers: no API key checked or sent anywhere. Vertex AI authenticates
+    via Google Cloud's Application Default Credentials — locally, whatever
+    `gcloud auth application-default login` set up; on Cloud Run, the
+    service's own identity, granted the "Vertex AI User" IAM role. If ADC
+    isn't set up at all, the SDK's own error surfaces clearly in the
+    exception handling below rather than this code trying to detect that
+    case itself beforehand.
+    """
+    from google import genai
+    from google.genai import errors as genai_errors
+    from google.genai import types as genai_types
+
+    if not settings.GCP_PROJECT_ID:
+        raise MatchingError(
+            _CLIENT_MSG_CONFIG,
+            "GCP_PROJECT_ID is not set — required to use Vertex AI (Gemini) as the AI provider. "
+            "Add it to .env, or select a different provider.",
+        )
+
+    client = genai.Client(vertexai=True, project=settings.GCP_PROJECT_ID, location=settings.GCP_REGION)
+    user_message = f"Buyer wants: {user_preferences}\n\nListings:\n{json.dumps(_build_listing_payload(listings_batch), indent=2)}"
+    _log_raw_input("Vertex", listings_batch, user_message)
+
+    def call():
+        return client.models.generate_content(
+            model=settings.VERTEX_MODEL,
+            contents=f"{SYSTEM_PROMPT}\n\n{user_message}",
+            # Gemini's SDK doesn't expose a separate system/user role split
+            # the same way Anthropic/OpenAI do in this call shape — folded
+            # into one prompt string instead, same content either way.
+            config=genai_types.GenerateContentConfig(
+                temperature=settings.TEMPERATURE,
+                # Matches Claude's temperature setting — same TEMPERATURE
+                # config value, same reasoning: lower temperature for more
+                # consistent, less creative scoring judgments. Previously
+                # unset here, meaning Gemini was silently running on
+                # whatever its own SDK default is, not the value actually
+                # configured for this app.
+                response_mime_type="application/json",
+                # Claude/OpenAI reliably return clean JSON from the prompt
+                # instruction alone ("Respond with ONLY a JSON array").
+                # Gemini needs this told explicitly, not just asked in the
+                # prompt — without it, Gemini can wrap its answer in
+                # explanatory text even when instructed not to, which
+                # silently breaks _parse_response_text (it just returns []
+                # and prints a parse-failure warning), meaning every
+                # listing in that batch gets skipped with no error raised
+                # anywhere — exactly the "runs fine, zero results" failure
+                # mode this was actually causing.
+            ),
+        )
+
+    try:
+        _call_start = time.perf_counter()
+        response = _retry_with_backoff(call, on_retry=on_retry)
+        _elapsed = time.perf_counter() - _call_start
+    except genai_errors.APIError as e:
+        code = getattr(e, "code", None)
+        message = getattr(e, "message", str(e))
+        if code == 429:
+            raise MatchingError(
+                _CLIENT_MSG_TRANSIENT,
+                "Vertex AI rate limit hit repeatedly even after retrying — you're sending requests "
+                "faster than your project's current quota allows. Try lowering MAX_CONCURRENT_BATCHES "
+                "in .env, or check your quotas in the Google Cloud Console.",
+            ) from e
+        if code in (401, 403):
+            raise MatchingError(
+                _CLIENT_MSG_CONFIG,
+                f"Vertex AI authentication/permission failed ({code}): {message} — locally, run "
+                "`gcloud auth application-default login`; on Cloud Run, confirm the service's "
+                "identity has the 'Vertex AI User' IAM role on GCP_PROJECT_ID.",
+            ) from e
+        if code == 404:
+            raise MatchingError(
+                _CLIENT_MSG_CONFIG,
+                f"Model '{settings.VERTEX_MODEL}' not found or not available in region '{settings.GCP_REGION}' "
+                f"for project '{settings.GCP_PROJECT_ID}'.",
+            ) from e
+        raise MatchingError(_CLIENT_MSG_UNKNOWN, f"Vertex AI API error ({code}): {message}") from e
+
+    usage = getattr(response, "usage_metadata", None)
+    input_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
+    output_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
+    _log_token_usage("Vertex", len(listings_batch), input_tokens, output_tokens, _elapsed)
+    _log_raw_output("Vertex", listings_batch, response.text)
+    return _parse_response_text(response.text)
+
+
 def _compute_deterministic_scores(raw_items: list[dict]) -> list[dict]:
     """
     Converts the model's per-listing requirements-met breakdown into an
@@ -485,6 +625,8 @@ def score_batch(user_preferences: str, listings_batch: list[dict], ai_provider: 
         raise ValueError(f"ai_provider must be one of {VALID_AI_PROVIDERS}, got '{provider}'")
     if provider == "openai":
         raw = _score_batch_openai(user_preferences, listings_batch, on_retry)
+    elif provider == "vertex":
+        raw = _score_batch_vertex(user_preferences, listings_batch, on_retry)
     else:
         raw = _score_batch_anthropic(user_preferences, listings_batch, on_retry)
     return _compute_deterministic_scores(raw)
@@ -601,8 +743,11 @@ def start_match_job(user_preferences: str, listings: list[dict], ai_provider: st
         "completed_batches": 0,
         "failed_batches": 0,       # batches that errored out (e.g. timeout) — the search continues without them, doesn't abort
         "in_flight_count": 0,      # how many batches are actively running right now, at this instant
-        "retry_count": 0,          # cumulative retries triggered so far across the whole job
-        "job_lock": threading.Lock(),  # protects retry_count from concurrent batch threads
+        "retry_count": 0,          # cumulative retries triggered so far across the whole job, all reasons combined
+        "retry_reasons": {},       # {"rate limit": N, "connection error": N} -- lets the frontend say WHY, not just how many.
+        # Kept alongside retry_count (not replacing it) so nothing that
+        # already reads the plain total needs to change to keep working.
+        "job_lock": threading.Lock(),  # protects retry_count/retry_reasons from concurrent batch threads
     }
     with _jobs_lock:
         _jobs[job_id] = job
@@ -632,9 +777,10 @@ def _run_job(job_id: str, user_preferences: str, listings: list[dict], ai_provid
     batches = _build_batches(listings)
     batch_iter = iter(batches)
 
-    def on_retry(attempt, delay):
+    def on_retry(attempt, delay, reason):
         with job["job_lock"]:
             job["retry_count"] += 1
+            job["retry_reasons"][reason] = job["retry_reasons"].get(reason, 0) + 1
 
     def update_results_so_far():
         """Rebuilds job['results'] from whatever's been scored so far and

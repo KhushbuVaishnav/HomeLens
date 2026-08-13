@@ -10,7 +10,7 @@ runs anywhere besides your laptop (staging, CI, a teammate's machine).
 
 Set these in your .env file:
     DATA_SOURCE=generated        # one of: live, realistic, generated
-    AI_PROVIDER=anthropic        # one of: anthropic, openai
+    AI_PROVIDER=anthropic        # one of: anthropic, openai, vertex
     SCORE_THRESHOLD=60           # 0-100
     BATCH_SIZE=8
     CORS_ALLOW_ORIGINS=*         # comma-separated in production, e.g. https://yourapp.com
@@ -29,7 +29,7 @@ DATA_DIR = BASE_DIR / "data"
 # routers that need to validate against these, instead of each defining its
 # own copy (which is how these can silently drift out of sync over time).
 VALID_DATA_SOURCES = ("live", "realistic", "generated")
-VALID_AI_PROVIDERS = ("anthropic", "openai")
+VALID_AI_PROVIDERS = ("anthropic", "openai", "vertex")
 
 
 class Settings:
@@ -59,6 +59,34 @@ class Settings:
     # default reasoning behavior. Per OpenAI's docs, temperature is only
     # accepted alongside reasoning_effort="none" specifically — see
     # _score_batch_openai for how that's handled.
+
+    # --- Vertex AI (Gemini) ---
+    # Deliberately no API key setting here — unlike Anthropic/OpenAI, Vertex
+    # AI authenticates via Google Cloud's own identity system (Application
+    # Default Credentials), not a static key. Locally: run
+    # `gcloud auth application-default login` once. On Cloud Run: grant the
+    # service's own service account the "Vertex AI User" IAM role — no
+    # secret to manage at all in that case, since Cloud Run already runs
+    # under an identity GCP recognizes.
+    GCP_PROJECT_ID: str | None = os.environ.get("GCP_PROJECT_ID")
+    GCP_REGION: str = os.environ.get("GCP_REGION", "europe-west1")
+    # Matches the region your Cloud Run services already run in (see the
+    # main backend's real URL) -- not required to match, Vertex AI calls
+    # and Cloud Run hosting are independent settings, but keeping them the
+    # same avoids extra cross-region latency for no reason. Confirmed via
+    # Google's own docs that europe-west1 is a fully supported Vertex AI
+    # location, not something exclusive to the US regions most tutorials
+    # default to.
+    VERTEX_MODEL: str = os.environ.get("VERTEX_MODEL", "gemini-2.5-flash")
+    # This value has already broken once during this project's own
+    # lifetime -- the original default, "gemini-2.0-flash", was shut down
+    # by Google on June 1, 2026, only months after being set here. Gemini
+    # model names/versions turn over unusually fast (multiple new
+    # generations shipped in the first half of 2026 alone). If Vertex AI
+    # calls start failing with a "model not found" MatchingError, checking
+    # for a newer/renamed model before assuming anything else is broken is
+    # the first thing to try -- current names are in the Vertex AI Model
+    # Garden in the Cloud Console, not something to trust as fixed here.
 
     # --- Matching behavior ---
     BATCH_SIZE: int = int(os.environ.get("BATCH_SIZE", 8))
@@ -114,6 +142,12 @@ class Settings:
             raise ValueError("AI_PROVIDER is 'anthropic' but ANTHROPIC_API_KEY is not set in .env")
         if self.AI_PROVIDER == "openai" and not self.OPENAI_API_KEY:
             raise ValueError("AI_PROVIDER is 'openai' but OPENAI_API_KEY is not set in .env")
+        if self.AI_PROVIDER == "vertex" and not self.GCP_PROJECT_ID:
+            raise ValueError(
+                "AI_PROVIDER is 'vertex' but GCP_PROJECT_ID is not set in .env — Vertex AI needs a "
+                "project to bill/authenticate against, even though (unlike Anthropic/OpenAI) it has "
+                "no API key of its own to check for here."
+            )
 
         # Soft warning, not a hard failure: the frontend's dropdown lets
         # someone pick EITHER provider for a single search, regardless of
@@ -126,6 +160,9 @@ class Settings:
                   "frontend's 'Matched by' dropdown will fail until it's added to .env.")
         if not self.OPENAI_API_KEY:
             print("[config warning] OPENAI_API_KEY is not set — selecting 'OpenAI' in the "
+                  "frontend's 'Matched by' dropdown will fail until it's added to .env.")
+        if not self.GCP_PROJECT_ID:
+            print("[config warning] GCP_PROJECT_ID is not set — selecting 'Gemini' in the "
                   "frontend's 'Matched by' dropdown will fail until it's added to .env.")
 
 
