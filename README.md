@@ -352,6 +352,49 @@ since nothing ever flags it. `--spot-check-agrees N` pulls every Nth
 `[AGREE]` into the same review flow as a real disagreement. Off by
 default; only takes effect together with `--review`.
 
+## Prompt caching, by provider
+
+The `SYSTEM_PROMPT` in `matching_service.py` is identical on every scoring
+call, which makes it a caching candidate — but the three providers don't
+handle this the same way:
+
+| Provider | How caching works | Status here |
+|---|---|---|
+| **Anthropic** | Opt-in only — you must tag a block with `cache_control`, nothing is cached automatically. The *tagged block itself* also has to clear a minimum size before anything actually gets cached (~1024 tokens for Sonnet/Opus, ~2048 for Haiku). | Tag is in place on `system` in `_score_batch_anthropic`, but currently a **no-op** — see below. |
+| **OpenAI** | Fully automatic, server-side. Caches the longest matching prefix across consecutive requests once the total prompt is ≥1024 tokens. No code required. | **Working**, verified live. |
+| **Vertex (Gemini 2.5)** | Fully automatic ("implicit caching"), same general mechanic as OpenAI. No code required. | **Working**, verified live — and this is the provider `AI_PROVIDER` currently defaults to. |
+
+**Current prompt size** — measured directly via a live call (not
+estimated): `SYSTEM_PROMPT` plus the thin per-batch wrapper (`"Buyer
+wants: ..."` + one near-empty listing) costs **717 input tokens total**,
+so `SYSTEM_PROMPT` alone is roughly **~700 tokens**.
+
+**Where that leaves Anthropic**: 700 tokens is below *both* thresholds —
+Sonnet/Opus's 1024 and Haiku's 2048 — so the `cache_control` tag does
+nothing today no matter how large a batch you send. Confirmed live: even
+a full 14-listing (~5850-token) call showed `cache write: 0` on both a
+first and a repeat call, because the minimum applies to the tagged
+block's own size, not the size of the whole request. It'll start paying
+off automatically if `SYSTEM_PROMPT` ever grows past ~1024 tokens, or the
+model changes — no code change needed at that point, just re-check the
+logged numbers.
+
+**Where that leaves OpenAI and Vertex**: both already cache today, no
+action needed. Verified live with two back-to-back, byte-identical calls
+(same query, same 14-listing batch): OpenAI's second call read
+`5011/5014` input tokens from cache; Vertex's read `5040/5805`. Those
+near-100% figures are an artifact of the test being an *exact* repeat,
+done specifically to confirm the mechanism is real — not a forecast of
+production savings. Real searches vary (different buyer text, different
+listings), so the only part guaranteed identical across calls is the
+~700-token `SYSTEM_PROMPT` itself; expect real-world cache hits close to
+that ~700 tokens/call, not the full request.
+
+Every provider now logs real `cache read` / `cache write` token counts on
+every call (`_log_token_usage` in `matching_service.py`) — check those
+numbers directly when this changes, rather than assuming caching
+behavior from the code alone.
+
 ## Moving to real MLS data
 
 Swap `DATA_SOURCE=live` for a real feed later: SimplyRETS production,

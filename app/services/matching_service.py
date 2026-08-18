@@ -258,7 +258,17 @@ def _score_batch_anthropic(user_preferences: str, listings_batch: list[dict], on
             model=settings.ANTHROPIC_MODEL,
             max_tokens=settings.MAX_TOKENS,
             temperature=settings.TEMPERATURE,
-            system=SYSTEM_PROMPT,
+            # cache_control marks SYSTEM_PROMPT as a reusable prefix — unlike
+            # OpenAI/Gemini, Anthropic only caches a block you explicitly
+            # flag this way, nothing is automatic. "ephemeral" is a 5-minute
+            # TTL, refreshed on every cache hit, which is the only TTL
+            # Anthropic currently offers. Below the model's minimum
+            # cacheable length (1024 tokens for Sonnet/Opus, 2048 for
+            # Haiku), this is silently a no-op — no error, cache_creation_
+            # input_tokens in the usage response just comes back 0. Verify
+            # empirically via the "cache read"/"cache write" figures this
+            # file now logs, don't assume it's working from the code alone.
+            system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user_message}],
         )
         _log_rate_limit_headers("Anthropic", raw.headers)
@@ -300,12 +310,18 @@ def _score_batch_anthropic(user_preferences: str, listings_batch: list[dict], on
     except anthropic.APIStatusError as e:
         raise MatchingError(*_humanize_anthropic_error(e)) from e
 
-    _log_token_usage("Anthropic", len(listings_batch), response.usage.input_tokens, response.usage.output_tokens, _elapsed)
+    _log_token_usage(
+        "Anthropic", len(listings_batch), response.usage.input_tokens, response.usage.output_tokens, _elapsed,
+        cached_tokens=response.usage.cache_read_input_tokens, cache_write_tokens=response.usage.cache_creation_input_tokens,
+    )
     _log_raw_output("Anthropic", listings_batch, response.content[0].text)
     return _parse_response_text(response.content[0].text)
 
 
-def _log_token_usage(provider: str, batch_size: int, input_tokens: int, output_tokens: int, elapsed_seconds: float) -> None:
+def _log_token_usage(
+    provider: str, batch_size: int, input_tokens: int, output_tokens: int, elapsed_seconds: float,
+    cached_tokens: int | None = None, cache_write_tokens: int | None = None,
+) -> None:
     """Prints EXACT token usage straight from the API response's own usage
     field — reliable even under concurrency, unlike trying to infer usage
     from the shared rate-limit 'remaining' headers (those reflect multiple
@@ -319,10 +335,22 @@ def _log_token_usage(provider: str, batch_size: int, input_tokens: int, output_t
     Deliberately measured this way: "how long did it actually take to get
     a usable result for this batch" is the number that matters for a real
     P95 of what a search experiences, not an idealized single-attempt
-    number that hides how often retries actually happen in practice."""
+    number that hides how often retries actually happen in practice.
+
+    cached_tokens / cache_write_tokens come straight from each provider's
+    own usage payload (not inferred) — the only reliable way to confirm
+    prompt caching is actually landing on a given call, rather than
+    assuming it from the code alone. Omitted from the line entirely when
+    a provider doesn't report them (None), rather than printing a
+    misleading 0."""
+    cache_part = ""
+    if cached_tokens is not None:
+        cache_part += f", cache read: {cached_tokens} tokens"
+    if cache_write_tokens is not None:
+        cache_part += f", cache write: {cache_write_tokens} tokens"
     print(f"[{provider} usage] batch of {batch_size} listings — "
           f"input: {input_tokens} tokens, output: {output_tokens} tokens, "
-          f"total: {input_tokens + output_tokens} tokens — "
+          f"total: {input_tokens + output_tokens} tokens{cache_part} — "
           f"latency: {elapsed_seconds * 1000:.0f}ms")
 
 
@@ -466,7 +494,16 @@ def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_re
     except APIStatusError as e:
         raise MatchingError(*_humanize_openai_error(e)) from e
 
-    _log_token_usage("OpenAI", len(listings_batch), response.usage.prompt_tokens, response.usage.completion_tokens, _elapsed)
+    # OpenAI caches automatically server-side once a request's shared prefix
+    # exceeds 1024 tokens — nothing to opt into in the request itself, so
+    # this is purely a read of whether that kicked in for this particular
+    # call, not something the code below causes.
+    cached = getattr(response.usage, "prompt_tokens_details", None)
+    cached_tokens = getattr(cached, "cached_tokens", None) if cached else None
+    _log_token_usage(
+        "OpenAI", len(listings_batch), response.usage.prompt_tokens, response.usage.completion_tokens, _elapsed,
+        cached_tokens=cached_tokens,
+    )
     _log_raw_output("OpenAI", listings_batch, response.choices[0].message.content)
     return _parse_response_text(response.choices[0].message.content)
 
@@ -563,7 +600,10 @@ def _score_batch_vertex(user_preferences: str, listings_batch: list[dict], on_re
     usage = getattr(response, "usage_metadata", None)
     input_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
     output_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
-    _log_token_usage("Vertex", len(listings_batch), input_tokens, output_tokens, _elapsed)
+    # Gemini 2.5 models apply implicit prefix caching automatically, same
+    # as OpenAI — no request change needed, just reading whether it hit.
+    cached_tokens = getattr(usage, "cached_content_token_count", None) if usage else None
+    _log_token_usage("Vertex", len(listings_batch), input_tokens, output_tokens, _elapsed, cached_tokens=cached_tokens)
     _log_raw_output("Vertex", listings_batch, response.text)
     return _parse_response_text(response.text)
 
