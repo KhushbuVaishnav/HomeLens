@@ -260,13 +260,23 @@ different depending on which, and it matters:**
 python scripts/llm_judge.py                                     # default: 14 listings, 3 queries, ~12 calls
 python scripts/llm_judge.py --full-sweep --sample 50             # a 50-listing sample of DATA_SOURCE instead
 python scripts/llm_judge.py --full-sweep --query "quiet street, walkable to Caltrain"
+python scripts/llm_judge.py --scorer openai --judge vertex       # pick both providers explicitly
+python scripts/llm_judge.py --judge anthropic                    # keep AI_PROVIDER as scorer, override just the judge
 ```
 
-Has whichever provider you're **not** scoring with — `AI_PROVIDER` picks
-the scorer, `llm_judge.py` picks the judge automatically using a fixed
-preference order (anthropic, then openai, then vertex — first one that
-isn't the scorer). Score with `anthropic`, judged by `openai` (same as
-before Vertex existed); score with `vertex`, judged by `anthropic` —
+By default, has whichever provider you're **not** scoring with review the
+verdicts — `AI_PROVIDER` picks the scorer, `llm_judge.py` picks the judge
+automatically using a fixed preference order (anthropic, then openai,
+then vertex — first one that isn't the scorer). Score with `anthropic`,
+judged by `openai` (same as before Vertex existed); score with `vertex`,
+judged by `anthropic`.
+
+**`--scorer`/`--judge` override either side explicitly** — pass one and
+the other still falls back to the rule above; pass both and both are used
+exactly as given, including picking the *same* provider for both (prints
+a self-review warning and proceeds — self-review risks the judge sharing
+the exact blind spot it's supposed to be checking for, but nothing stops
+you from doing it deliberately). Whichever providers end up in play, each
 review `score_batch`'s real verdicts for whether each requirement
 judgment is actually supported by the listing's text. Not a replacement
 for the `--with-ai` test above, which is real hand-verified ground truth;
@@ -290,11 +300,13 @@ CSV export: scrolling terminal text is a poor tool for reviewing more
 than a handful of listings; a spreadsheet gives you sortable, filterable,
 non-truncated columns instead.
 
-Whatever the judge provider turns out to be needs its credentials
+Whichever providers end up scoring and judging need their credentials
 available — `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in `.env` for those two,
 or working Application Default Credentials plus `GCP_PROJECT_ID` for
-Vertex — the script checks this up front and tells you exactly what's
-missing rather than failing partway through a run.
+Vertex — the script checks **both** up front (not just the judge — the
+scorer can now be overridden away from `AI_PROVIDER` too, so it's no
+longer guaranteed pre-validated at app startup) and tells you exactly
+what's missing rather than failing partway through a run.
 
 Judging happens in the same `BATCH_SIZE`-sized batches scoring already
 uses, not one call per listing — reviewing N listings costs `ceil(N/8)`

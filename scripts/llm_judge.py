@@ -33,6 +33,8 @@ Cost, in real call counts (see README for the full breakdown):
 Run:
     python scripts/llm_judge.py
     python scripts/llm_judge.py --full-sweep --sample 50
+    python scripts/llm_judge.py --scorer openai --judge vertex   # pick both explicitly
+    python scripts/llm_judge.py --judge anthropic                # keep AI_PROVIDER as scorer, override just the judge
     python scripts/llm_judge.py --full-sweep --query "walkable to Caltrain, quiet street"
 """
 
@@ -204,6 +206,24 @@ def _opposite_provider(provider: str) -> str:
     return provider  # unreachable unless VALID_AI_PROVIDERS shrinks to one
 
 
+def _missing_credentials(provider: str) -> str | None:
+    """None if `provider` has what it needs to actually make a call, else a
+    ready-to-print explanation of what's missing. Checked for BOTH the
+    scoring and judge provider now that either can be picked explicitly via
+    --scorer/--judge — previously the scoring provider was always just
+    AI_PROVIDER, already validated at app startup, so only the judge
+    provider's credentials needed a check here. That assumption no longer
+    holds once scoring_provider can be overridden to something .env was
+    never actually validated against."""
+    if provider == "anthropic" and not settings.ANTHROPIC_API_KEY:
+        return "ANTHROPIC_API_KEY is not set in .env — required to use anthropic as scorer or judge."
+    if provider == "openai" and not settings.OPENAI_API_KEY:
+        return "OPENAI_API_KEY is not set in .env — required to use openai as scorer or judge."
+    if provider == "vertex" and not settings.GCP_PROJECT_ID:
+        return "GCP_PROJECT_ID is not set in .env — required to use vertex as scorer or judge."
+    return None
+
+
 def _model_for_provider(provider: str) -> str:
     """The configured model name for whichever provider this is — used
     only for the human-readable "Scored by: X (model)" print lines.
@@ -307,9 +327,49 @@ def _judge_batch_openai(user_preferences: str, listings_batch: list[dict], verdi
     return _parse_response_text(response.choices[0].message.content)
 
 
+def _judge_batch_vertex(user_preferences: str, listings_batch: list[dict], verdicts_by_id: dict, few_shot_block: str = "") -> list[dict]:
+    from google import genai
+    from google.genai import types as genai_types
+
+    if not settings.GCP_PROJECT_ID:
+        print("GCP_PROJECT_ID is not set in .env — required to judge with Vertex AI.")
+        sys.exit(1)
+
+    client = genai.Client(vertexai=True, project=settings.GCP_PROJECT_ID, location=settings.GCP_REGION)
+    system_prompt = f"{JUDGE_SYSTEM_PROMPT}\n\n{few_shot_block}" if few_shot_block else JUDGE_SYSTEM_PROMPT
+    user_message = (
+        f"Buyer wanted: {user_preferences}\n\n"
+        f"Listings and the original scorer's verdicts:\n"
+        f"{json.dumps(_build_judge_payload(listings_batch, verdicts_by_id), indent=2)}"
+    )
+    _log_raw_input("Vertex (judge)", listings_batch, user_message)
+
+    def call():
+        return client.models.generate_content(
+            model=settings.VERTEX_MODEL,
+            contents=f"{system_prompt}\n\n{user_message}",
+            config=genai_types.GenerateContentConfig(
+                temperature=settings.TEMPERATURE,
+                response_mime_type="application/json",
+            ),
+        )
+
+    _call_start = time.perf_counter()
+    response = _retry_with_backoff(call)
+    _elapsed = time.perf_counter() - _call_start
+    usage = getattr(response, "usage_metadata", None)
+    input_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
+    output_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
+    _log_token_usage("Vertex (judge)", len(listings_batch), input_tokens, output_tokens, _elapsed)
+    _log_raw_output("Vertex (judge)", listings_batch, response.text)
+    return _parse_response_text(response.text)
+
+
 def judge_batch(user_preferences: str, listings_batch: list[dict], verdicts_by_id: dict, judge_provider: str, few_shot_block: str = "") -> list[dict]:
     if judge_provider == "openai":
         return _judge_batch_openai(user_preferences, listings_batch, verdicts_by_id, few_shot_block)
+    if judge_provider == "vertex":
+        return _judge_batch_vertex(user_preferences, listings_batch, verdicts_by_id, few_shot_block)
     return _judge_batch_anthropic(user_preferences, listings_batch, verdicts_by_id, few_shot_block)
 
 
@@ -449,25 +509,41 @@ def main():
              "blind spot and agree while both being wrong, which disagreement-only review would never "
              "surface. Off by default (agrees are never spot-checked unless this is set).",
     )
+    parser.add_argument(
+        "--scorer", choices=VALID_AI_PROVIDERS, default=None,
+        help="Which provider produced the verdicts being judged. Defaults to AI_PROVIDER in .env.",
+    )
+    parser.add_argument(
+        "--judge", choices=VALID_AI_PROVIDERS, default=None,
+        help="Which provider reviews the scorer's verdicts. Defaults to whichever of the other two "
+             "providers _opposite_provider() picks. Can be set to the SAME provider as --scorer, but "
+             "that's self-review — it risks sharing the exact blind spots this check exists to catch, "
+             "so a warning prints if you do this.",
+    )
     args = parser.parse_args()
 
-    scoring_provider = settings.AI_PROVIDER
+    scoring_provider = args.scorer or settings.AI_PROVIDER
     if scoring_provider not in VALID_AI_PROVIDERS:
-        print(f"AI_PROVIDER must be one of {VALID_AI_PROVIDERS}, got '{scoring_provider}'")
+        print(f"--scorer/AI_PROVIDER must be one of {VALID_AI_PROVIDERS}, got '{scoring_provider}'")
         sys.exit(1)
 
-    judge_provider = _opposite_provider(scoring_provider)
-    judge_key_missing = (
-        (judge_provider == "anthropic" and not settings.ANTHROPIC_API_KEY)
-        or (judge_provider == "openai" and not settings.OPENAI_API_KEY)
-    )
-    if judge_key_missing:
+    # Defaulting logic only kicks in when --judge wasn't given — otherwise
+    # your explicit choice always wins, including picking the SAME provider
+    # as the scorer (see the self-review warning below).
+    judge_provider = args.judge or _opposite_provider(scoring_provider)
+
+    if judge_provider == scoring_provider:
         print(
-            f"AI_PROVIDER is '{scoring_provider}', so the judge needs the OTHER provider "
-            f"('{judge_provider}') — but its API key isn't set in .env. The judge always uses "
-            f"whichever provider you're NOT scoring with, so both ANTHROPIC_API_KEY and "
-            f"OPENAI_API_KEY need to be set for this script to run."
+            f"Warning: scorer and judge are both '{scoring_provider}' — self-review risks sharing "
+            f"the exact blind spots this check exists to catch (see _opposite_provider's docstring). "
+            f"Proceeding since this was set explicitly via --judge."
         )
+
+    missing_creds = {p: _missing_credentials(p) for p in {scoring_provider, judge_provider}}
+    missing_creds = {p: msg for p, msg in missing_creds.items() if msg}
+    if missing_creds:
+        for provider, msg in missing_creds.items():
+            print(msg)
         sys.exit(1)
 
     if args.full_sweep:
