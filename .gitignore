@@ -11,3 +11,4 @@ diagrams/
 # Disposable -- fully overwritten every run, no value in version history
 scripts/llm_judge_output.csv
 scripts/analyze_scores_output.csv
+scripts/eval_dashboard.html

@@ -54,9 +54,11 @@ import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app.config import settings
 from app.services.listings_service import HardFilters, fetch_listings, normalize_listing
+from golden_dataset import QUIET_TRUE, QUIET_FALSE, OFFICE_TRUE, OFFICE_FALSE, CALTRAIN_TRUE, CALTRAIN_FALSE
 
 BASELINE_PATH = Path(__file__).resolve().parent / "frequency_baseline.json"
 
@@ -207,23 +209,18 @@ def run_frequency_snapshot_test(update_baseline: bool):
 # signal, not "did the pipeline run without crashing."
 # ---------------------------------------------------------------------------
 
-# Ground truth, hand-verified against each listing's actual remarks text in
-# app/data/realistic_listings.json. Listings not listed for a given
-# dimension are deliberately excluded from that dimension's assertions
-# because their remarks are genuinely ambiguous on that specific point (e.g.
-# 1500 Hudson St mentions "some street noise" but never calls itself
-# "quiet" or "busy" outright) — asserting on an ambiguous case would be
-# testing our own guess, not the model's accuracy.
-
-QUIET_TRUE = {2001001, 2001002, 2001004, 2001006, 2001007, 2001008, 2001010, 2001011, 2001012, 2001013}
-QUIET_FALSE = {2001003, 2001009}
-# excluded (ambiguous): 2001005 (Fair Oaks — "some road noise", softer than "busy"), 2001014 (Hudson — downtown foot-traffic noise, not framed as busy/quiet)
-
-OFFICE_TRUE = {2001001, 2001002, 2001004, 2001006, 2001007, 2001008, 2001010, 2001011, 2001013}
-OFFICE_FALSE = {2001003, 2001005, 2001009, 2001012, 2001014}
-
-CALTRAIN_TRUE = {2001014}
-CALTRAIN_FALSE = {2001001, 2001002, 2001003, 2001004, 2001005, 2001006, 2001007, 2001008, 2001009, 2001010, 2001011, 2001012, 2001013}
+# Ground truth now lives in scripts/golden_dataset.py (QUIET_TRUE/FALSE,
+# OFFICE_TRUE/FALSE, CALTRAIN_TRUE/FALSE, imported above) — hand-verified
+# against each listing's actual remarks text in
+# app/data/realistic_listings.json the same way it always was, just moved
+# so eval_dashboard.py's much larger set of dimensions can share it
+# without duplicating (and risking drifting from) these three. Listings
+# not listed for a given dimension are deliberately excluded from that
+# dimension's assertions because their remarks are genuinely ambiguous on
+# that specific point (e.g. 1500 Hudson St mentions "some street noise"
+# but never calls itself "quiet" or "busy" outright) — asserting on an
+# ambiguous case would be testing our own guess, not the model's
+# accuracy.
 
 
 def _fetch_all_scores(preferences: str, listings: list[dict]) -> dict:

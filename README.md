@@ -364,6 +364,74 @@ since nothing ever flags it. `--spot-check-agrees N` pulls every Nth
 `[AGREE]` into the same review flow as a real disagreement. Off by
 default; only takes effect together with `--review`.
 
+## Ground-truth accuracy dashboard: `scripts/eval_dashboard.py`
+
+```bash
+python scripts/eval_dashboard.py                    # AI_PROVIDER only
+python scripts/eval_dashboard.py --provider openai   # one specific provider
+python scripts/eval_dashboard.py --compare-providers # all 3 side by side (3x the calls)
+```
+
+Renders `scripts/eval_dashboard.html` — an offline-viewable report scored
+against **real ground truth**, not another model's opinion. This is the
+difference from `llm_judge.py` above: the judge script has one model
+review another's verdicts, and neither is inherently more correct if
+they share a blind spot. This script instead scores against
+`scripts/golden_dataset.py` — the single hand-verified answer key both
+this script and `verify_test_cases.py`'s Tier 3 import from, so the two
+can never drift out of sync — where every expected answer was verified
+by a human actually reading the listing's remarks text (and, for
+schools, the real ratings in `app/data/schools.json`) in
+`app/data/realistic_listings.json`.
+
+**Coverage — the full golden dataset, not a sample:**
+
+- **8 single-requirement dimensions**, each with real positive AND
+  negative listings: quiet street, home office, walkable to Caltrain,
+  single-story/no-stairs, low-maintenance condo (HOA), newer
+  construction (2000+), large lot (8,000+ sqft), and one **negation**
+  case — `definitely not a ranch-style home` — the exact example
+  `SYSTEM_PROMPT` itself uses ("style ... e.g. 'not a ranch'"), now
+  actually checked against ground truth for the first time.
+- **2 ambiguous-first dimensions** — highly-rated schools, recently-
+  renovated kitchen — where a real chunk of listings are deliberately
+  left ungraded because a confident answer depends on an interpretation
+  call a human hasn't fixed (e.g. does "good schools" mean the
+  elementary rating alone, or all three assigned schools together?).
+  Those rows still show the model's real score, just no PASS/FAIL
+  verdict, so you can see what the model actually said on a genuinely
+  hard case without pretending there's a right answer to grade it
+  against.
+- **4 combined multi-requirement cases, from 2 up to 5 requirements at
+  once** — e.g. `quiet street, a home office, no stairs, definitely not
+  a ranch-style home, and a large lot of at least 8,000 sqft` — testing
+  the deterministic met/total scoring math together with classification
+  accuracy, not just a single true/false judgment.
+
+Listings any dimension excludes as genuinely ambiguous (see the comments
+next to each `_TRUE`/`_FALSE` set in `golden_dataset.py`) are still
+listed in the dashboard, marked excluded — the golden dataset is never
+quietly narrowed without saying so.
+
+The HTML itself needs no server and no internet connection to view —
+open it directly in a browser. Per dimension: a pass/fail accuracy bar,
+a case breakdown (positive/negative/partial/ambiguous, whichever apply),
+and a full table of every listing with its expected label, actual score,
+PASS/FAIL (or a neutral "N/A" badge for ambiguous rows), and the model's
+real reason text. `--compare-providers` additionally renders a
+side-by-side accuracy comparison across all three providers, useful for
+answering "which provider is actually more accurate on this data" with
+a real number instead of a guess.
+
+Same batching economy as the other scripts (`ceil(14/BATCH_SIZE)` calls
+per dimension, not one per listing), and the same credential check as
+`llm_judge.py` — whichever provider(s) you're evaluating need their
+`.env` credentials present, checked up front. The larger dimension set
+means more calls than before: roughly 28 scoring calls per provider (8
+binary + 2 ambiguous + 4 combined dimensions, `ceil(14/BATCH_SIZE)` each) —
+still cheap (14 fixed listings, no `--full-sweep`-style real dataset
+cost), but worth knowing before running `--compare-providers` (3x that).
+
 ## Prompt caching, by provider
 
 The `SYSTEM_PROMPT` in `matching_service.py` is identical on every scoring
