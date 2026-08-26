@@ -13,6 +13,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
+from langsmith import traceable, get_current_run_tree
 from app.config import settings, VALID_AI_PROVIDERS
 
 
@@ -236,6 +237,7 @@ def _humanize_anthropic_error(e) -> tuple[str, str]:
     return _CLIENT_MSG_CONFIG, technical
 
 
+@traceable(name="score_batch_anthropic")
 def _score_batch_anthropic(user_preferences: str, listings_batch: list[dict], on_retry=None) -> list[dict]:
     import anthropic
 
@@ -342,7 +344,15 @@ def _log_token_usage(
     prompt caching is actually landing on a given call, rather than
     assuming it from the code alone. Omitted from the line entirely when
     a provider doesn't report them (None), rather than printing a
-    misleading 0."""
+    misleading 0.
+
+    Also attaches these same numbers as metadata on the current LangSmith
+    run, if tracing is active (get_current_run_tree() returns None when
+    it isn't — see the @traceable docstring on each _score_batch_* caller
+    for why this is always safe to call unconditionally). This is the one
+    place all three providers' token/cache numbers already funnel through,
+    so it's the cheapest hook point to also surface them in LangSmith's
+    UI instead of only ever being visible in this print() line."""
     cache_part = ""
     if cached_tokens is not None:
         cache_part += f", cache read: {cached_tokens} tokens"
@@ -352,6 +362,18 @@ def _log_token_usage(
           f"input: {input_tokens} tokens, output: {output_tokens} tokens, "
           f"total: {input_tokens + output_tokens} tokens{cache_part} — "
           f"latency: {elapsed_seconds * 1000:.0f}ms")
+
+    run = get_current_run_tree()
+    if run:
+        run.metadata.update({
+            "provider": provider,
+            "batch_size": batch_size,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cached_tokens": cached_tokens,
+            "cache_write_tokens": cache_write_tokens,
+            "elapsed_ms": round(elapsed_seconds * 1000),
+        })
 
 
 def _log_raw_output(provider: str, listings_batch: list[dict], raw_text: str) -> None:
@@ -417,6 +439,7 @@ def _humanize_openai_error(e) -> tuple[str, str]:
     return _CLIENT_MSG_CONFIG, f"OpenAI API error ({e.status_code}): {message}"
 
 
+@traceable(name="score_batch_openai")
 def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_retry=None) -> list[dict]:
     import openai
     from openai import OpenAI, AuthenticationError, NotFoundError, APIStatusError, APITimeoutError, APIConnectionError
@@ -508,6 +531,7 @@ def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_re
     return _parse_response_text(response.choices[0].message.content)
 
 
+@traceable(name="score_batch_vertex")
 def _score_batch_vertex(user_preferences: str, listings_batch: list[dict], on_retry=None) -> list[dict]:
     """Vertex AI's Gemini, via the google-genai SDK's Vertex mode
     (client = genai.Client(vertexai=True, ...)) — the current, non-deprecated
@@ -659,6 +683,15 @@ def _compute_deterministic_scores(raw_items: list[dict]) -> list[dict]:
     return results
 
 
+@traceable(name="score_batch")
+# Off by default, zero network activity, and safe to leave on this
+# unconditionally — @traceable only actually does anything when
+# LANGSMITH_TRACING=true and a real LANGSMITH_API_KEY are set (see
+# .env.example). The three _score_batch_<provider> functions below are
+# also @traceable, so with tracing on you get one parent "score_batch"
+# run in LangSmith with the actual provider call nested underneath it —
+# traceable tracks that nesting itself via contextvars, nothing here has
+# to wire the parent/child relationship up manually.
 def score_batch(user_preferences: str, listings_batch: list[dict], ai_provider: str = None, on_retry=None) -> list[dict]:
     provider = ai_provider or settings.AI_PROVIDER
     if provider not in VALID_AI_PROVIDERS:

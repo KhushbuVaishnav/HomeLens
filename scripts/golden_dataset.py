@@ -82,7 +82,7 @@ ACCESSIBLE_TRUE = {2001001, 2001003, 2001004, 2001005, 2001007, 2001009, 2001010
 ACCESSIBLE_FALSE = {2001002, 2001006, 2001008}
 
 # ---------------------------------------------------------------------------
-# HOA_CONDO — "a low-maintenance condo with HOA-covered maintenance"
+# HOA_CONDO — "a condo with HOA-covered maintenance"
 # Ground truth: only the two actual condos (2001013, 2001014) have both
 # an HOA fee AND remarks explicitly describing the HOA covering
 # maintenance/landscaping/exterior upkeep for a low-maintenance
@@ -93,6 +93,16 @@ ACCESSIBLE_FALSE = {2001002, 2001006, 2001008}
 # low-maintenance-condo-living situation. A model could reasonably score
 # this either way depending on which half of the requirement it weighs
 # more, so it's excluded rather than force-labeled.
+#
+# Deliberately dropped the "low-maintenance" prefix from the query — same
+# lesson as ACCESSIBLE/RECENTLY_RENOVATED above, confirmed live via
+# langsmith_eval.py's per-example results: "a low-maintenance condo with
+# HOA-covered maintenance" got split into 3 requirements ("low-
+# maintenance", "condo", "HOA-covered"), and non-condo listings with a
+# merely tidy backyard picked up partial credit (33) for "low-
+# maintenance" alone, scoring above 0 when they should have failed
+# outright. "Low-maintenance" was never meant to be graded on its own —
+# the ground truth here has only ever been about condo+HOA status.
 # ---------------------------------------------------------------------------
 HOA_CONDO_TRUE = {2001013, 2001014}
 HOA_CONDO_FALSE = {2001001, 2001002, 2001003, 2001004, 2001005, 2001006, 2001007, 2001009, 2001010, 2001011, 2001012}
@@ -108,11 +118,21 @@ NEWER_TRUE = {2001008, 2001013}  # yearBuilt 2008, 2001
 NEWER_FALSE = {2001001, 2001002, 2001003, 2001004, 2001005, 2001006, 2001007, 2001009, 2001010, 2001011, 2001012, 2001014}
 
 # ---------------------------------------------------------------------------
-# LARGE_LOT — "a large lot, at least 8,000 sqft"
+# LARGE_LOT — "a lot of at least 8,000 sqft"
 # Ground truth: property.lotSize, a plain numeric threshold (also passed
 # to the model directly). Clean gap in the actual data (next below is
 # 7200, next above is 9100) — no borderline cases. The two condos have no
 # lot at all (lotSize: null) and are unambiguously FALSE.
+#
+# Deliberately dropped the "large lot" phrase and kept only the numeric
+# threshold — same lesson as HOA_CONDO above, confirmed live via
+# langsmith_eval.py: "a large lot, at least 8,000 sqft" got split into
+# "large lot" (vague, credited from remarks language like "large, private
+# backyard" regardless of actual size) and "at least 8,000 sqft"
+# (correctly checked against the real number) as two separate
+# requirements — a 6,500 sqft lot with a nice-sounding backyard scored
+# 50 instead of the correct 0. The ground truth was always the numeric
+# threshold; the descriptive phrase was redundant and actively harmful.
 # ---------------------------------------------------------------------------
 LARGE_LOT_TRUE = {2001006, 2001008}  # lotSize 9100, 10200
 LARGE_LOT_FALSE = {2001001, 2001002, 2001003, 2001004, 2001005, 2001007, 2001009, 2001010, 2001011, 2001012, 2001013, 2001014}
@@ -195,11 +215,11 @@ BINARY_DIMENSIONS = [
      "positive": CALTRAIN_TRUE, "negative": CALTRAIN_FALSE},
     {"key": "accessible", "label": "Single-story home", "query": "a single-story home",
      "positive": ACCESSIBLE_TRUE, "negative": ACCESSIBLE_FALSE},
-    {"key": "hoa_condo", "label": "Low-maintenance condo (HOA)", "query": "a low-maintenance condo with HOA-covered maintenance",
+    {"key": "hoa_condo", "label": "Condo with HOA maintenance", "query": "a condo with HOA-covered maintenance",
      "positive": HOA_CONDO_TRUE, "negative": HOA_CONDO_FALSE},
     {"key": "newer", "label": "Newer construction (2000+)", "query": "newer construction, built after 2000",
      "positive": NEWER_TRUE, "negative": NEWER_FALSE},
-    {"key": "large_lot", "label": "Large lot (8,000+ sqft)", "query": "a large lot, at least 8,000 sqft",
+    {"key": "large_lot", "label": "Large lot (8,000+ sqft)", "query": "a lot of at least 8,000 sqft",
      "positive": LARGE_LOT_TRUE, "negative": LARGE_LOT_FALSE},
     {"key": "not_ranch", "label": "Not a ranch style (negation)", "query": "definitely not a ranch-style home",
      "positive": NOT_RANCH_TRUE, "negative": NOT_RANCH_FALSE},
@@ -287,7 +307,7 @@ COMBINED_CASES = [
     {
         "key": "combo_5", "n": 5,
         "label": "Quiet + home office + single-story + not ranch + large lot (5 requirements)",
-        "query": "quiet street, a home office, a single-story layout, definitely not a ranch-style home, and a large lot of at least 8,000 sqft",
+        "query": "quiet street, a home office, a single-story layout, definitely not a ranch-style home, and a lot of at least 8,000 sqft",
         "cases": _combo_cases([_QUIET_DIM, _OFFICE_DIM, _ACCESSIBLE_DIM, _NOT_RANCH_DIM, _LARGE_LOT_DIM], _ALL_IDS),
     },
 ]

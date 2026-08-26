@@ -432,6 +432,50 @@ binary + 2 ambiguous + 4 combined dimensions, `ceil(14/BATCH_SIZE)` each) —
 still cheap (14 fixed listings, no `--full-sweep`-style real dataset
 cost), but worth knowing before running `--compare-providers` (3x that).
 
+## LangSmith tracing and a hosted dashboard
+
+Two separate, optional integrations with [LangSmith](https://smith.langchain.com) —
+neither is required, and neither touches `eval_dashboard.py`/`eval_dashboard.html`,
+which keep working exactly as before regardless of whether either is set up.
+
+**1. Tracing** — `matching_service.py`'s `score_batch()` and each
+`_score_batch_<provider>()` are `@traceable`. This is a documented no-op
+with zero network activity unless `LANGSMITH_TRACING=true` and a real
+`LANGSMITH_API_KEY` are set in `.env` (see the commented-out block already
+there). Once enabled, every real scoring call — from the live app, any
+script, anywhere — shows up in your LangSmith project with the actual
+prompt, response, token/cache usage, and latency, nested by call
+(`score_batch` → whichever provider function actually ran). Setup:
+sign up at smith.langchain.com, create a key, uncomment and fill in the
+`LANGSMITH_*` lines in `.env`.
+
+**2. `scripts/langsmith_eval.py`** — a **separate, hosted dashboard**,
+additional to `eval_dashboard.py`'s local HTML, not a replacement for it.
+Uploads `golden_dataset.py`'s ground truth to LangSmith as a real Dataset,
+then runs `score_batch()` against it via LangSmith's `evaluate()` API.
+Same ground truth, same pass/fail rule as `eval_dashboard.py` (both import
+from `golden_dataset.py`) — the two should never disagree about what
+"correct" means, only about where you go to look at the result.
+
+```bash
+python scripts/langsmith_eval.py                     # AI_PROVIDER only
+python scripts/langsmith_eval.py --provider openai
+python scripts/langsmith_eval.py --refresh-dataset    # re-upload after editing golden_dataset.py
+```
+
+One real difference from `eval_dashboard.py`: this makes **one scoring
+call per listing** (173 calls total for the full golden dataset), not
+`eval_dashboard.py`'s shared `ceil(14/BATCH_SIZE)`-per-dimension batches —
+LangSmith's dataset/example model is naturally one-example-at-a-time, and
+splitting the batching economy would blur which specific listing a given
+result belongs to in the LangSmith UI. Costs more real API calls for the
+same coverage; worth knowing before running it per-provider repeatedly.
+
+Requires `LANGSMITH_API_KEY` in `.env` (same key as tracing above, but
+this talks to LangSmith's dataset/evaluate API directly — independent of
+whether `LANGSMITH_TRACING` is on). `evaluate()` prints a direct link to
+the results in your LangSmith project when it finishes.
+
 ## Prompt caching, by provider
 
 The `SYSTEM_PROMPT` in `matching_service.py` is identical on every scoring
