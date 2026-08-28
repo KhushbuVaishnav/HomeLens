@@ -12,3 +12,5 @@ diagrams/
 scripts/llm_judge_output.csv
 scripts/analyze_scores_output.csv
 scripts/eval_dashboard.html
+scripts/vector_eval_dashboard_*.html
+app/data/listings_vec.db

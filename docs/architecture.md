@@ -4,10 +4,14 @@
 database (`app/data/schools.db`) rather than a parsed JSON file — running
 against the `generated` data source (500+ synthetic listings, Redwood City).
 
-The frontend offers three explicit search modes:
+The frontend offers four explicit search modes:
 - **Traditional** — hard filters only, zero AI involvement
 - **Filters + AI** — hard filters narrow the pool, then AI scores what's left
 - **AI only** — pure natural language, zero hard filters
+- **Vector search (experimental)** — pure embedding-similarity ranking
+  against listing descriptions, zero hard filters, **zero LLM calls at
+  all**. A standalone learning/comparison tool sitting alongside the other
+  three, not a replacement for any of them — see §6.
 
 Diagrams are [Mermaid](https://mermaid.js.org) — render natively on GitHub,
 GitLab, and most modern markdown viewers. Standalone `.mmd` files are in
@@ -32,27 +36,39 @@ flowchart LR
         UC5(Select AI provider)
         UC6(Verify a match<br/>inspect raw listing text)
         UC7(Score a listing against<br/>buyer's preferences)
+        UC8(Vector search — experimental<br/>rank by embedding similarity,<br/>zero LLM calls)
+        UC9(Embed a listing description<br/>for similarity ranking)
     end
 
     Buyer --> UC1
     Buyer --> UC2
     Buyer --> UC3
     Buyer --> UC6
+    Buyer --> UC8
 
     UC2 -. include .-> UC7
     UC3 -. include .-> UC7
     UC4 -. extend .-> UC2
     UC4 -. extend .-> UC3
     UC5 -. extend .-> UC7
+    UC8 -. include .-> UC9
 
     UC7 --> Claude
     UC7 --> OpenAI
     UC7 --> Gemini
+    UC9 --> Gemini
 ```
 
 Traditional mode has no relationship to Cancel (UC4): it's a single, quick
 synchronous request with no background job to cancel. Only the two
-AI-using modes run as cancellable jobs.
+AI-*scoring* modes run as cancellable jobs — Vector search is also a
+single synchronous request (no job to cancel), same category as
+Traditional, just for a different reason: a brute-force similarity scan
+is fast enough (sub-millisecond, verified directly) to need no background
+job/polling machinery at all. UC9 (embedding a listing) always goes to
+Gemini specifically — Vector search deliberately always uses Vertex's
+embedding model regardless of which `AI_PROVIDER` is configured for
+scoring, since the point is learning Vertex's own embedding offering.
 
 ---
 
@@ -60,38 +76,52 @@ AI-using modes run as cancellable jobs.
 
 ```mermaid
 flowchart TD
-    Frontend["app.jsx<br/>React SPA, static<br/>3 modes: Traditional / Filters+AI / AI-only"]
+    Frontend["app.jsx<br/>React SPA, static<br/>4 modes: Traditional / Filters+AI / AI-only / Vector search"]
     Main["main.py<br/>assembly"]
     ListingsRouter["listings.py<br/>router"]
     MatchRouter["match.py<br/>router"]
+    VectorRouter["vector_search.py<br/>router"]
     ListingsService["listings_service.py"]
     MatchingService["matching_service.py"]
+    VectorService["vector_service.py"]
     SchoolsService["schools_service.py<br/>SQLite-backed"]
     GeneratedData[("generated_listings.json<br/>500+ listings")]
     SchoolsData[("schools.db<br/>SQLite, real SQL queries")]
+    VecData[("listings_vec.db<br/>SQLite, embeddings as BLOBs<br/>self-hosted, brute-force cosine")]
     Anthropic{{"Anthropic API"}}
     OpenAI{{"OpenAI API"}}
-    Vertex{{"Vertex AI<br/>(Gemini)"}}
+    Vertex{{"Vertex AI<br/>(Gemini — chat + embeddings)"}}
 
     Frontend -->|Traditional mode| ListingsRouter
     Frontend -->|"Filters+AI or AI-only mode"| MatchRouter
+    Frontend -->|"Vector search mode"| VectorRouter
     Main -. includes .-> ListingsRouter
     Main -. includes .-> MatchRouter
+    Main -. includes .-> VectorRouter
     ListingsRouter --> ListingsService
     MatchRouter --> ListingsService
     MatchRouter --> MatchingService
+    VectorRouter --> ListingsService
+    VectorRouter --> VectorService
     ListingsService --> SchoolsService
     ListingsService --> GeneratedData
     SchoolsService --> SchoolsData
+    VectorService --> VecData
     MatchingService --> Anthropic
     MatchingService --> OpenAI
     MatchingService --> Vertex
+    VectorService -->|"embeddings only<br/>(text-embedding-005)"| Vertex
 ```
 
-Both AI-using modes route through the same `MatchRouter`, differing only
-in which filter values get sent — AI-only always sends every filter as
-`null`. `ListingsRouter` never imports `matching_service`, so Traditional
-mode structurally cannot contact any AI provider.
+The two AI-*scoring* modes route through the same `MatchRouter`, differing
+only in which filter values get sent — AI-only always sends every filter
+as `null`. Vector search reuses that same "send every filter as `null`"
+treatment but goes through its own dedicated `VectorRouter` → `VectorService`,
+never `MatchingService` — structurally, it cannot call Claude, GPT, or
+Gemini's chat models, only Gemini's embedding model, and it does so
+regardless of whatever `AI_PROVIDER` is configured for scoring.
+`ListingsRouter` never imports `matching_service` either, so Traditional
+mode structurally cannot contact any AI provider at all.
 
 ---
 
@@ -195,6 +225,46 @@ sequenceDiagram
     Note over FE,Router: One request, one response — no job_id,<br/>no polling loop, no AI provider ever contacted.<br/>This is the entire flow for Traditional mode.
 ```
 
+## 4c. Sequence Diagram — Vector Search (experimental)
+
+Synchronous like Traditional (no background job — a brute-force
+similarity scan over hundreds of listings is sub-millisecond work,
+verified directly against this app's own listings, so there's nothing
+slow enough here to need `/match/*`'s job/polling machinery). Filters are
+always sent as `null`, same treatment as AI-only, for the cleanest
+possible "embedding similarity vs. AI reasoning" comparison on the same
+query. No LLM call anywhere in this path — only Gemini's *embedding*
+model, never a chat/completion model.
+
+```mermaid
+sequenceDiagram
+    actor Buyer
+    participant FE as Frontend
+    participant Router as VectorRouter
+    participant LS as listings_service
+    participant VS as vector_service
+    participant DB as listings_vec.db
+    participant Gemini as Vertex AI<br/>(embeddings only)
+
+    Buyer->>FE: Enter preferences, click "Find similar listings"<br/>(Vector search mode — filters hidden, sent as null)
+    FE->>Router: POST /vector-search
+    activate Router
+    Router->>LS: build_hard_filters(), fetch_listings(),<br/>normalize_listing()
+    LS-->>Router: candidate listings (unfiltered — same as AI-only)
+    Router->>VS: semantic_search(preferences, candidates, data_source)
+    VS->>Gemini: embed_content(preferences)
+    Gemini-->>VS: query embedding
+    VS->>DB: SELECT mls_id, embedding<br/>WHERE data_source = ? AND mls_id IN (...)
+    DB-->>VS: stored embeddings (built ahead of time,<br/>see indexing flow in §6)
+    VS->>VS: brute-force cosine similarity,<br/>every candidate vs. the query — sub-millisecond
+    VS-->>Router: listings ranked by similarity, best first
+    Router-->>FE: matches[] (similarity field, no match_score, no match_reason)
+    deactivate Router
+    FE-->>Buyer: render result cards<br/>(single flat list, similarity % shown,<br/>explicitly labeled "not AI-verified")
+
+    Note over FE,Router: One request, one response — no job_id, no polling,<br/>no matching_service import anywhere in this path.
+```
+
 ---
 
 ## 5. Security View
@@ -224,7 +294,7 @@ flowchart LR
     API --> Jobs
     API -->|"HTTPS + key<br/>(Filters+AI / AI-only modes only)"| Anthropic
     API -->|"HTTPS + key<br/>(Filters+AI / AI-only modes only)"| OpenAI
-    API -->|"HTTPS + ADC, no static key<br/>(Filters+AI / AI-only modes only)"| Vertex
+    API -->|"HTTPS + ADC, no static key<br/>(Filters+AI / AI-only, and<br/>Vector search — embeddings only)"| Vertex
 
     style Untrusted fill:#2a0f0f,stroke:#CC0000,stroke-width:2px
     style Trusted fill:#0f2412,stroke:#007700,stroke-width:2px
@@ -242,111 +312,100 @@ flowchart LR
 | 7 | `schools.db` is committed to the repo | Synthetic, non-sensitive reference data, same category as `generated_listings.json` |
 | 8 | Traditional mode has a stronger privacy profile | Never contacts Anthropic, OpenAI, or Vertex AI — structurally guaranteed, since `ListingsRouter` never imports `matching_service` |
 | 9 | Vertex AI's auth model has no static secret at all | Authenticates via Google Cloud's Application Default Credentials (local `gcloud auth application-default login`, or the Cloud Run service's own identity in production) — nothing resembling `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` exists for this provider, so there's no equivalent key to leak, rotate, or accidentally commit |
+| 10 | Vector search has an even narrower reach than the other AI-using modes | `VectorRouter` never imports `matching_service` — structurally cannot contact Anthropic or OpenAI at all, in either direction, regardless of `AI_PROVIDER`. Its only external call is Gemini's embedding model — never a chat/completion model, never sees or acts on anything resembling a prompt-injection surface the way `match_reason` generation does |
 
 ---
 
-## 6. Future Scope — Semantic Retrieval Pre-Filter (`sqlite-vec`)
+## 6. Vector Search (experimental) — self-hosted semantic search
 
-**Not implemented.**
+**Implemented**, as a standalone 4th search mode — not the pre-filter
+design originally sketched in this section. That earlier idea (narrow the
+candidate pool by similarity *before* still sending it to the LLM,
+invisibly, inside the existing Filters+AI/AI-only pipeline) is
+superseded by what's below. The goal that actually drove this build was
+different: a **hands-on learning exercise** with Vertex's embedding model
+and vector similarity search, built so it's **directly, visibly
+comparable** to the AI-scored modes on the exact same query in the exact
+same UI — not an invisible backend optimization a user would never
+notice either way.
 
-### The problem it solves
+### Why self-hosted, not a managed vector database
 
-Every listing that survives hard filtering currently gets sent to the LLM
-for full per-requirement reasoning (§4a) — for the `generated` dataset,
-that's up to 500 listings across ~64 batches, real latency and real cost
-per search. A semantic pre-filter would narrow that pool by similarity to
-the buyer's preferences *before* the expensive per-requirement scoring
-runs, rather than replacing that scoring — most useful in **AI-only
-mode**, which has no hard filters to narrow anything today, so the full
-dataset always reaches the LLM regardless of query.
+Real numbers, not a guess: a deployed Vertex AI Vector Search index
+endpoint (the managed ANN service Google offers) bills **continuously by
+node-hour, regardless of query volume** — a real example found while
+evaluating this, a 10,000-record deployment running **~$547.50/month**,
+with no pay-as-you-go option. At this app's scale (hundreds of listings,
+used interactively, not production query volume), that always-on cost
+buys nothing a brute-force scan doesn't already give for free — a full
+cosine-similarity scan over hundreds of rows was measured directly
+against this app's own listing data at **sub-millisecond**. The managed
+service's real value is sub-linear search time at massive scale
+(millions of vectors); this project doesn't have that scale, so it gets
+none of that benefit while still paying the always-on cost.
 
-### The use case, concretely
+So: Vertex's *embedding model* is used (to actually learn it, and because
+it's genuinely cheap, pay-per-call), but the *vectors themselves* are
+stored as plain BLOBs in an ordinary SQLite table
+(`app/data/listings_vec.db`), and searched with brute-force cosine
+similarity in Python — no `sqlite-vec` or any other vector-index
+extension. (`sqlite-vec` was tried first, since it's the closer match to
+what this section originally proposed — it requires SQLite's loadable-extension
+support, which every local Python build on the development machine used
+for this work lacked. Rather than fight that, the plain-BLOB approach was
+used instead — functionally equivalent at this scale, since a full scan
+over hundreds of rows costs nothing meaningful either way.)
 
-Two separate flows: build the index once (offline, on data change), then
-query it on every real search.
-
-**Indexing** — run whenever `generated_listings.json` changes, same
-trigger as reseeding `schools.db`:
+### Indexing — built once, ahead of time, not per-request
 
 ```mermaid
 flowchart LR
-    Data[("generated_listings.json")]
-    Seed["seed_listings_vec_db.py<br/>(proposed)"]
-    Embed["Embedding model<br/>(local or API)"]
-    VecDB[("listings_vec.db<br/>SQLite + sqlite-vec<br/>committed to repo")]
+    Data[("generated_listings.json<br/>or realistic_listings.json")]
+    Seed["build_listing_embeddings.py"]
+    Embed["Vertex embedding model<br/>text-embedding-005"]
+    VecDB[("listings_vec.db<br/>SQLite, embeddings as BLOBs<br/>keyed by (mls_id, data_source)")]
 
     Data --> Seed
     Seed -->|description text| Embed
-    Embed -->|embedding vector| Seed
-    Seed -->|"INSERT INTO vec_index<br/>(mls_id, embedding)"| VecDB
+    Embed -->|768-dim embedding vector| Seed
+    Seed -->|"INSERT OR REPLACE<br/>(mls_id, data_source, embedding)"| VecDB
 ```
 
-**Query time** — a new stage between hard filtering and AI scoring:
+Run manually (`python scripts/build_listing_embeddings.py --data-source
+generated`), same manual-trigger philosophy as `seed_schools_db.py` —
+embedding calls cost real (if tiny) money, so building the index is a
+deliberate, visible action, never triggered automatically on app startup.
+Re-running for the same `data_source` overwrites existing rows rather
+than accumulating duplicates. Only `realistic`/`generated` are supported
+— `live` is SimplyRETS' external, dynamic sandbox data, not ours to
+pre-index.
 
-```mermaid
-sequenceDiagram
-    actor Buyer
-    participant FE as Frontend
-    participant Router as MatchRouter
-    participant LS as listings_service
-    participant VS as vector_service<br/>(proposed)
-    participant DB as listings_vec.db
-    participant MS as matching_service
+### Query time — see §4c for the full sequence diagram
 
-    Buyer->>FE: Enter preferences, click "Find my matches"
-    FE->>Router: POST /match/start
-    Router->>LS: build_hard_filters(), fetch_listings()
-    LS-->>Router: hard-filtered candidates (e.g. 500)
-    Router->>VS: semantic_prefilter(preferences, candidates)
-    VS->>VS: embed(preferences)
-    VS->>DB: SELECT mls_id FROM vec_index<br/>ORDER BY distance LIMIT K
-    DB-->>VS: top-K mls_ids by similarity
-    VS-->>Router: narrowed candidate list
-    Router->>MS: start_match_job(narrowed candidates)
-    Note over MS: Unchanged — same batch-scoring<br/>pipeline, just a smaller input
-```
+One synchronous request (`POST /vector-search`), no job/polling — the
+similarity scan is fast enough to need none of `/match/*`'s background-job
+machinery. `app/services/vector_service.py` embeds the buyer's query,
+loads whichever stored embeddings match the request's listings and
+`data_source`, computes cosine similarity against each, returns the
+listings ranked best-first with a `similarity` field attached. No
+`matching_service` import anywhere in this path — structurally the same
+"cannot reach an LLM" guarantee Traditional mode already has, just for a
+different reason (this mode's entire point is being an independent
+comparison point, so it must never accidentally call one).
 
-### Rough interface
+### What this is actually for, and its known real limitation
 
-A new `app/services/vector_service.py`, kept separate from
-`matching_service.py` the same way `schools_service.py` is separate from
-`listings_service.py` — a distinct data source, its own module:
-
-- `index_listings(listings: list[dict]) -> None` — embeds each listing's
-  `description` and writes to `listings_vec.db`. Called by a one-time
-  script (`seed_listings_vec_db.py`), not at request time — same shape as
-  `seed_schools_db.py`.
-- `semantic_prefilter(preferences: str, candidates: list[dict], k: int) -> list[dict]`
-  — embeds the buyer's preferences, queries `listings_vec.db` for the
-  `k` closest `mls_id`s among the candidates, returns the narrowed list.
-  Called from `MatchRouter`, between `fetch_listings()` and
-  `start_match_job()`.
-
-Two concrete decisions this would need before any code gets written,
-each measured against real data rather than guessed — same "verify
-before implementing" habit `analyze_scores.py` already applies to
-`SCORE_THRESHOLD`:
-
-- **Which embedding model.** A local sentence-transformers model avoids
-  a third API dependency entirely; an API-based embedding model (e.g.
-  the same providers already in use) adds one more network call per
-  search but needs no local model weights shipped with the repo.
-- **The value of `k`.** Too small risks silently dropping a real match
-  before the LLM ever sees it — the actual failure mode to check for
-  by comparing pre-filtered results against today's full-corpus results
-  on the same queries, not by picking a number that sounds reasonable.
-
-### Where this fits, and where it doesn't
-
-`schools.db` already establishes the exact pattern a listings-embedding
-index would follow: built once, committed to the repo, queried read-only
-at runtime, safe on an ephemeral-filesystem host since nothing ever
-writes to it after the build step.
-
-This only fits the `generated` and `realistic` sources, where the data
-lives in a file you control — `live` (the real SimplyRETS sandbox) isn't
-something you'd pre-build a local index against, since its content can
-change day to day.
+A visible, hands-on comparison against AI-only mode on the same query —
+not a production ranking feature. Verified live, not assumed: querying
+"definitely not a ranch-style home" against the real `generated` dataset
+returns an actual Ranch-style listing as the #2 result by similarity — a
+real, reproduced instance of a well-known embedding weakness (negation:
+"not X" and "X" share nearly all their vocabulary, so cosine similarity
+barely distinguishes them). Confirmed the same failure mode independently
+on a second, unrelated dataset (fictional school descriptions) before
+building this — not a one-off fluke. This is expected, not a bug, and is
+exactly the kind of divergence from AI-only mode's reasoning that makes
+this comparison useful to look at, not a reason to hide the mode.
 
 ---
 

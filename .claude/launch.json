@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "homelens-backend",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd '/Users/khushbusahota/Desktop/AI PROJECTS/MLS_Scraper_SQLite' && source .venv/bin/activate && uvicorn app.main:app --reload --port 8000"],
+      "port": 8000
+    },
+    {
+      "name": "homelens-frontend",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd '/Users/khushbusahota/Desktop/AI PROJECTS/MLS_Scraper_SQLite/frontend' && python3 -m http.server 5500"],
+      "port": 5500
+    }
+  ]
+}

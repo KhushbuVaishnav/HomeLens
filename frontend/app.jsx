@@ -121,6 +121,7 @@ function MatchGauge({ score, isPartial }) {
 
 function ResultCard({ listing, isPartial, matchedByLabel, isTraditional = false }) {
   const [expanded, setExpanded] = useState(false);
+  const isVector = typeof listing.similarity === "number"; // derived from data shape, same pattern as hasMatchData below — not a separate prop the caller has to remember to pass
 
   const price = listing.price
     ? `$${listing.price.toLocaleString()}`
@@ -130,7 +131,7 @@ function ResultCard({ listing, isPartial, matchedByLabel, isTraditional = false 
 
   return (
     <div
-      className={`result-card${isPartial ? " result-card--partial" : ""}${isTraditional ? " result-card--traditional" : ""}`}
+      className={`result-card${isPartial ? " result-card--partial" : ""}${isTraditional ? " result-card--traditional" : ""}${isVector ? " result-card--vector" : ""}`}
     >
       {!isTraditional && (
         hasMatchData ? (
@@ -228,6 +229,13 @@ function ResultCard({ listing, isPartial, matchedByLabel, isTraditional = false 
           </div>
         )}
 
+        {typeof listing.similarity === "number" && (
+          <div className="result-card__similarity">
+            <strong>{Math.round(listing.similarity * 100)}% description similarity</strong>
+            {" "}— ranked by embedding distance, not AI-verified. Read the full description yourself to confirm.
+          </div>
+        )}
+
         {!isTraditional && (
           <button
             type="button"
@@ -263,6 +271,8 @@ function ResultCard({ listing, isPartial, matchedByLabel, isTraditional = false 
             <p className="result-card__expanded-label">
               {isTraditional
                 ? "Description"
+                : typeof listing.similarity === "number"
+                ? "Full description (this is what the embedding was compared against)"
                 : `Full description (verify ${matchedByLabel || "the AI"}'s quote against this directly)`}
             </p>
 
@@ -296,6 +306,7 @@ function App() {
   const [preferences, setPreferences] = useState("");
   const [searchMode, setSearchMode] = useState("ai_assisted"); // traditional | ai_assisted | nlp_only
   const skipAI = searchMode === "traditional";
+  const isVectorMode = searchMode === "vector"; // no AI call either, but a different results shape/flow than skipAI (Traditional)
   const [status, setStatus] = useState("idle"); // idle | loading | error | done
   const [errorMessage, setErrorMessage] = useState("");
   const [validationError, setValidationError] = useState(""); // client-side form issues — never touches status/results
@@ -325,6 +336,33 @@ function App() {
       })
       .catch(() => setBackendMeta(null)); // silently ignore — header just falls back to a generic label
   }, []);
+
+  // Switching modes must never leave a PREVIOUS mode's results on screen
+  // under the NEW mode's tab — e.g. run a search in AI-only, then click
+  // Vector search without resubmitting, and the AI-scored results would
+  // otherwise just sit there, rendered (wrongly) as if they were vector
+  // results, since the card rendering logic keys off each result's own
+  // data shape (match_score vs. similarity), not off searchMode itself.
+  // Previously harmless — the original 3 modes all rendered stale
+  // results the same visual way — but Vector search's genuinely
+  // different card style (flat list + similarity badge, no full/partial
+  // split) makes stale results from another mode look like a phantom
+  // search that never actually ran. Deliberately does NOT touch
+  // filters/preferences — switching tabs should keep what you typed so
+  // you can compare the same query across modes, just not show another
+  // mode's leftover results while you do.
+  useEffect(() => {
+    pollingActiveRef.current = false; // stop any in-flight poll loop from a previous mode's still-running search
+    jobIdRef.current = null;
+    setStatus("idle");
+    setErrorMessage("");
+    setResults([]);
+    setProgress({ completed: 0, total: 0, inFlight: 0 });
+    setRetryCount(0);
+    setRetryReasons({});
+    setFailedBatches(0);
+    setWasCancelled(false);
+  }, [searchMode]);
 
   // Keep the City field matching whichever source is active — e.g. a
   // "Redwood City" search on live's Houston-only sandbox would just return
@@ -407,8 +445,11 @@ function App() {
     // holds its defaults underneath (e.g. cities: "Redwood City") — without
     // this override, that stale default would silently still apply as a
     // hard filter, breaking the promise that this mode uses NO hard
-    // filters at all, purely natural language.
-    const filterBody = searchMode === "nlp_only" ? {
+    // filters at all, purely natural language. Vector search shares this
+    // same treatment on purpose — for the cleanest possible "AI reasoning
+    // vs. embedding similarity" comparison, both start from the exact
+    // same unfiltered candidate pool, driven purely by the same free text.
+    const filterBody = (searchMode === "nlp_only" || searchMode === "vector") ? {
       cities: null, min_price: null, max_price: null, min_beds: null, min_baths: null,
       min_sqft: null, min_school_rating: null, strict_school_rating: null,
       property_types: null, max_hoa: null, min_stories: null, max_stories: null,
@@ -445,6 +486,28 @@ function App() {
         }
         const data = await res.json();
         setResults(data.listings || []);
+        setStatus("done");
+        return;
+      }
+
+      if (searchMode === "vector") {
+        // Experimental vector-search mode: single synchronous call, no
+        // job/polling — a brute-force similarity scan over hundreds of
+        // listings is sub-millisecond work, nothing here is slow enough
+        // to need the AI-mode's background-job machinery. No LLM call at
+        // all in this path — see app/routers/vector_search.py.
+        const res = await fetch(`${API_BASE}/vector-search`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filters: filterBody, preferences: preferences.trim() }),
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || `Request failed (${res.status})`);
+        }
+        const data = await res.json();
+        setResults(data.matches || []);
         setStatus("done");
         return;
       }
@@ -611,9 +674,19 @@ function App() {
               AI only
               <span className="mode-selector__hint">Just describe it</span>
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={searchMode === "vector"}
+              className={`mode-selector__option mode-selector__option--vector${searchMode === "vector" ? " mode-selector__option--active" : ""}`}
+              onClick={() => setSearchMode("vector")}
+            >
+              Vector search
+              <span className="mode-selector__hint">Experimental — no AI reasoning</span>
+            </button>
           </div>
 
-          {searchMode !== "nlp_only" && (
+          {searchMode !== "nlp_only" && searchMode !== "vector" && (
             <div className="field-group">
               <div className="field field--full">
                 <label htmlFor="cities">City</label>
@@ -786,6 +859,8 @@ function App() {
                 <label htmlFor="preferences" className="field__ai-label">
                   {searchMode === "nlp_only"
                     ? "Describe, in your own words, what your ideal home looks like!"
+                    : searchMode === "vector"
+                    ? "Describe your ideal home — ranked by description similarity, not AI reasoning."
                     : "Describe, in your own words, the details that make a difference!"}
                 </label>
                 <textarea
@@ -807,9 +882,9 @@ function App() {
           <div className="button-row">
             <button type="submit" className="submit-btn" disabled={status === "loading"}>
               {status === "loading" ? (
-                <React.Fragment><span className="spinner" />{skipAI ? "Loading..." : "Matching..."}</React.Fragment>
+                <React.Fragment><span className="spinner" />{skipAI ? "Loading..." : isVectorMode ? "Searching..." : "Matching..."}</React.Fragment>
               ) : (
-                skipAI ? "Browse all" : "Find my matches"
+                skipAI ? "Browse all" : isVectorMode ? "Find similar listings" : "Find my matches"
               )}
             </button>
             {status === "loading" ? (
@@ -851,6 +926,8 @@ function App() {
                   ? "Set your filters and click Find my matches — straightforward search, no AI involved."
                   : searchMode === "nlp_only"
                   ? "Just describe what you're looking for below — no filters needed. The AI reads each listing's full description to find real fits."
+                  : searchMode === "vector"
+                  ? "Experimental: just describe what you're looking for below — ranked purely by embedding similarity to each listing's description. No AI reasoning, no filters — a comparison point for the AI-only mode, not a replacement for it."
                   : "Fill in your criteria and describe what you're actually looking for — the AI reads each listing's description, not just its specs, to find real fits."}
               </p>
             </div>
@@ -859,10 +936,12 @@ function App() {
           {status === "loading" && (
             <div className="state-panel">
               <p className="state-panel__title">
-                {skipAI ? "Loading listings..." : "Scoring listings..."}
+                {skipAI ? "Loading listings..." : isVectorMode ? "Ranking by similarity..." : "Scoring listings..."}
               </p>
               <p className="state-panel__body">
-                {!skipAI && progress.total > 0
+                {isVectorMode
+                  ? "Embedding your query and ranking listings by description similarity — no AI reasoning involved."
+                  : !skipAI && progress.total > 0
                   ? `Scored ${progress.completed} of ${progress.total} batches${progress.inFlight > 0 ? ` — ${progress.inFlight} running concurrently right now` : ""}. Click Cancel any time to stop and see what's been scored so far.`
                   : "Pulling candidates, then scoring each one against what you described."}
               </p>
@@ -904,9 +983,15 @@ function App() {
           )}
 
           {status !== "error" && results.length > 0 && (() => {
-            // Browse-all results have no requirements/score data at all —
-            // just show them as one flat list in that case.
-            const hasRequirementData = !skipAI && results.some((l) => typeof l.requirements_total === "number");
+            // Browse-all results (Traditional) and Vector search results
+            // both have no requirements/score data at all — just show them
+            // as one flat list in either case. isVectorMode is checked
+            // FIRST and separately from Traditional, not folded into the
+            // same skipAI-driven branch — a vector result genuinely isn't
+            // "traditional" (it still shows a similarity score, unlike a
+            // plain browse-all listing), it just also lacks
+            // requirements_total the way Traditional's raw listings do.
+            const hasRequirementData = !skipAI && !isVectorMode && results.some((l) => typeof l.requirements_total === "number");
 if (!hasRequirementData) {
   return (
     <div className="result-grid">
@@ -916,7 +1001,7 @@ if (!hasRequirementData) {
           listing={listing}
           isTraditional={skipAI}
           matchedByLabel={
-            skipAI
+            skipAI || isVectorMode
               ? null
               : (AI_PROVIDER_LABELS[selectedAiProvider] || selectedAiProvider)
           }

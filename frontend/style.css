@@ -18,6 +18,7 @@
   --muted-dim: #5d6584;
   --good: #4cb37e;
   --warn: #e2a63c;
+  --vector: #9b7ede; /* experimental vector-search mode — deliberately its own hue, not a shade of --good/--warn, since it's a different methodology (embedding similarity) not a match-quality signal */
 
   --font-display: 'Space Grotesk', system-ui, sans-serif;
   --font-body: 'IBM Plex Sans', system-ui, sans-serif;
@@ -286,9 +287,15 @@ button {
 
 .mode-selector {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
   gap: 8px;
   margin-bottom: 20px;
+}
+
+@media (max-width: 560px) {
+  .mode-selector {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 .mode-selector__option {
@@ -314,6 +321,11 @@ button {
   background: var(--blueprint-dim);
   border-color: var(--blueprint);
   color: var(--paper);
+}
+
+.mode-selector__option--vector.mode-selector__option--active {
+  background: rgba(155, 126, 222, 0.28);
+  border-color: var(--vector);
 }
 
 .mode-selector__hint {
@@ -642,6 +654,10 @@ button {
   border-left: 3px solid var(--warn);
 }
 
+.result-card--vector {
+  border-left: 3px solid var(--vector);
+}
+
 @media (max-width: 560px) {
   .result-card {
     grid-template-columns: 1fr;
@@ -795,6 +811,20 @@ button {
   display: block;
   margin-bottom: 4px;
   font-weight: 700;
+}
+
+.result-card__similarity {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  background: rgba(155, 126, 222, 0.06);
+  border-left: 2px solid var(--vector);
+  padding: 10px 12px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.result-card__similarity strong {
+  color: var(--vector);
 }
 
 .requirements-badge {

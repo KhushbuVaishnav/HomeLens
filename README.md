@@ -14,12 +14,14 @@ HomeLens/
 │   ├── models.py              # Pydantic request/response schemas
 │   ├── routers/
 │   │   ├── listings.py        # POST /listings — hard filters only, never calls AI
-│   │   └── match.py           # POST /match — hard filters + AI scoring
+│   │   ├── match.py           # POST /match — hard filters + AI scoring
+│   │   └── vector_search.py   # POST /vector-search — embedding similarity only, no LLM call
 │   ├── services/
 │   │   ├── listings_service.py   # Fetch + filter logic, all data sources
-│   │   ├── matching_service.py   # AI scoring, Anthropic or OpenAI behind one switch
-│   │   └── schools_service.py    # School ratings lookup — SQLite-backed in this variant
-│   └── data/                  # generated/realistic JSON + schools.json + schools.db
+│   │   ├── matching_service.py   # AI scoring, Anthropic/OpenAI/Vertex behind one switch
+│   │   ├── schools_service.py    # School ratings lookup — SQLite-backed in this variant
+│   │   └── vector_service.py     # Self-hosted embedding similarity search (experimental)
+│   └── data/                  # generated/realistic JSON + schools.json/.db + listings_vec.db
 ├── scripts/
 │   ├── generate_listings.py   # Regenerate the large synthetic dataset
 │   ├── analyze_scores.py      # See real AI score distributions (for tuning SCORE_THRESHOLD)
@@ -169,6 +171,61 @@ frontend to test filters alone with zero AI cost.
   it, Luna runs at its own default temperature, not `TEMPERATURE`'s value.
   This is optional, not required — Luna passes the accuracy test fine
   either way.
+
+## Vector search (experimental) — 4th search mode
+
+A learning-focused, standalone 4th search mode alongside Traditional /
+Filters+AI / AI-only — pure embedding-similarity ranking against listing
+descriptions, with **zero LLM calls**. Built to sit side-by-side with
+AI-only mode so you can compare, on the exact same query, where vector
+similarity agrees with the AI's reasoning and where it diverges — not a
+production ranking feature, a hands-on way to see how the two approaches
+actually differ.
+
+**How it works, end to end:**
+1. **Index once, ahead of time** (not per-request):
+   ```bash
+   python scripts/build_listing_embeddings.py --data-source generated
+   python scripts/build_listing_embeddings.py --data-source realistic
+   ```
+   Embeds every listing's `description` with Vertex's embedding model
+   (`text-embedding-005`) and stores the vectors in
+   `app/data/listings_vec.db`. Manual, same philosophy as
+   `seed_schools_db.py` — embedding calls cost real (if tiny) money, so
+   building the index is a deliberate, visible step, never triggered
+   automatically on app startup. Only `realistic`/`generated` are
+   supported — `live` is SimplyRETS' external sandbox data, not ours to
+   pre-index.
+2. **At search time**: your query gets embedded, then ranked against the
+   stored listing embeddings by cosine similarity — computed brute-force
+   in Python, not a specialized index. One synchronous request/response
+   (`POST /vector-search`), no background job or polling — a full
+   similarity scan over hundreds of listings is sub-millisecond work, so
+   there's nothing here slow enough to need `/match/*`'s job machinery.
+
+**Why self-hosted, not Vertex's managed Vector Search service** — a real
+cost finding, not a guess: a deployed Vertex AI Vector Search index
+endpoint bills continuously by node-hour *regardless of query volume* —
+a real example, a 10,000-record deployment running **~$547.50/month**,
+no pay-as-you-go option. At this app's scale (hundreds of listings, used
+interactively), that always-on cost buys nothing a brute-force scan
+doesn't already give for free — verified directly, a full scan over
+hundreds of rows is sub-millisecond. The managed service's actual value
+is sub-linear search time at massive scale (millions of vectors); this
+project doesn't have that scale, so self-hosting (a plain SQLite table +
+Python) gets the same practical result for a fraction of the cost.
+
+**A real, known limitation, verified live, not theoretical**: query
+"definitely not a ranch-style home" against the real dataset and the #2
+result is an actual Ranch-style listing. Embedding similarity is weak at
+negation — "not X" and "X" share nearly all their vocabulary, so cosine
+similarity barely distinguishes them. This is expected, reproduced
+independently on a second, unrelated dataset before this was built, and
+is exactly the kind of divergence from AI-only mode's reasoning worth
+seeing directly, not something to hide.
+
+See `docs/architecture.md` §6 for the full design writeup, and §4c for
+the request-flow sequence diagram.
 
 ## Schools
 

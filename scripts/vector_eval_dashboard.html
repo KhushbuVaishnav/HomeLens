@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HomeLens — Vector Search Accuracy Dashboard</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.10);
+    --card:           #ffffff;
+
+    --status-good:     #0ca30c;
+    --status-good-bg:  #e7f6e7;
+    --status-critical: #d03b3b;
+    --status-critical-bg: #fbe9e9;
+
+    --vector: #9b7ede;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page:           #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --border:         rgba(255,255,255,0.10);
+      --card:           #221f1f;
+
+      --status-good:     #0ca30c;
+      --status-good-bg:  #10331a;
+      --status-critical: #e66767;
+      --status-critical-bg: #3a1616;
+
+      --vector: #b199e8;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.45;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 20px 80px; }
+
+  header.top { margin-bottom: 20px; }
+  header.top h1 { font-size: 22px; margin: 0 0 6px; }
+  header.top .meta { color: var(--text-secondary); font-size: 13px; }
+  header.top .meta code { background: var(--gridline); border-radius: 4px; padding: 1px 5px; }
+
+  .method-note {
+    background: var(--card); border: 1px solid var(--vector); border-left: 3px solid var(--vector);
+    border-radius: 10px; padding: 14px 16px; margin-bottom: 24px;
+    font-size: 13px; color: var(--text-secondary); line-height: 1.6;
+  }
+  .method-note strong { color: var(--vector); }
+
+  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .stat-tile {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .stat-tile .label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+  .stat-tile .value { font-size: 26px; font-weight: 600; margin-top: 4px; font-variant-numeric: proportional-nums; }
+  .stat-tile .sub { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px 20px; margin-bottom: 18px;
+  }
+  .card h2 { font-size: 16px; margin: 0 0 2px; }
+  .card .query { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+  .card .query code { background: var(--gridline); border-radius: 4px; padding: 1px 5px; }
+
+  .bar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .bar-track {
+    flex: 1; display: flex; height: 22px; border-radius: 6px; overflow: hidden;
+    background: var(--gridline); gap: 2px;
+  }
+  .bar-seg { height: 100%; }
+  .bar-seg.good { background: var(--status-good); }
+  .bar-seg.critical { background: var(--status-critical); }
+  .bar-pct { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text-secondary); width: 46px; text-align: right; flex-shrink: 0; }
+
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--text-secondary); margin: 8px 0 14px; }
+  .legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+  .case-breakdown { font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .case-breakdown b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--gridline); vertical-align: top; }
+  th { color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+  td.num { font-variant-numeric: tabular-nums; }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600;
+    border-radius: 5px; padding: 2px 7px;
+  }
+  .badge.pass { background: var(--status-good-bg); color: var(--status-good); }
+  .badge.fail { background: var(--status-critical-bg); color: var(--status-critical); }
+
+  .chip { display: inline-block; font-size: 11px; border-radius: 4px; padding: 1px 6px; background: var(--gridline); color: var(--text-secondary); }
+
+  .excluded { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
+  .table-wrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>Vector search accuracy dashboard</h1>
+    <div class="meta" id="meta-line"></div>
+  </header>
+
+  <div class="method-note" id="method-note"></div>
+
+  <div id="stat-section"></div>
+  <div id="dimensions"></div>
+</div>
+
+<script id="eval-data" type="application/json">{"mode": "ungraded", "generated_at": "2026-08-27T20:16:19.335475+00:00", "dataset": "app/data/generated_listings.json (500 listings) \u2014 generated", "listing_count": 500, "dimensions": [{"key": "quiet", "label": "Quiet street", "query": "quiet street", "type": "ungraded", "rows": [{"mls_id": 3000011, "address": "70151 Roosevelt Ln", "rank": 1, "similarity": 0.5889757601544054}, {"mls_id": 3000029, "address": "91298 Poplar Pl", "rank": 2, "similarity": 0.5801720955405137}, {"mls_id": 3000135, "address": "19122 Hudson Ave", "rank": 3, "similarity": 0.5788556902294045}, {"mls_id": 3000466, "address": "65148 Hopkins St", "rank": 4, "similarity": 0.5752861948260533}, {"mls_id": 3000166, "address": "3043 Charter Ave", "rank": 5, "similarity": 0.5741447733732316}, {"mls_id": 3000425, "address": "90869 Hillcrest Way", "rank": 6, "similarity": 0.5738754984815495}, {"mls_id": 3000118, "address": "93330 Cedar Pl", "rank": 7, "similarity": 0.5736050763473945}, {"mls_id": 3000423, "address": "1442 Brewster Ln", "rank": 8, "similarity": 0.572817113173315}, {"mls_id": 3000480, "address": "32178 Hamilton Ln", "rank": 9, "similarity": 0.5722608703832043}, {"mls_id": 3000363, "address": "63122 Woodside Rd #386", "rank": 10, "similarity": 0.5701107205122925}]}, {"key": "office", "label": "Home office", "query": "a home office", "type": "ungraded", "rows": [{"mls_id": 3000061, "address": "91507 Grand Ln #378", "rank": 1, "similarity": 0.5919961745723479}, {"mls_id": 3000225, "address": "45131 Stambaugh Pl", "rank": 2, "similarity": 0.5840915547754644}, {"mls_id": 3000396, "address": "61688 Hamilton Way", "rank": 3, "similarity": 0.5832428290309456}, {"mls_id": 3000420, "address": "25233 Spring Dr", "rank": 4, "similarity": 0.5777358433192737}, {"mls_id": 3000214, "address": "15979 Vine Dr", "rank": 5, "similarity": 0.5766542697052808}, {"mls_id": 3000220, "address": "20348 Alma St", "rank": 6, "similarity": 0.5755775691951274}, {"mls_id": 3000256, "address": "90495 Edgewood Ave", "rank": 7, "similarity": 0.5750906564207021}, {"mls_id": 3000058, "address": "27681 Vera Pl #88", "rank": 8, "similarity": 0.5740900910323405}, {"mls_id": 3000387, "address": "41205 Douglas Way", "rank": 9, "similarity": 0.5720536014188564}, {"mls_id": 3000382, "address": "20845 Elm St", "rank": 10, "similarity": 0.5698944774427981}]}, {"key": "caltrain", "label": "Walkable to Caltrain", "query": "walkable to Caltrain", "type": "ungraded", "rows": [{"mls_id": 3000078, "address": "20089 Roosevelt Way #62", "rank": 1, "similarity": 0.7371858328948381}, {"mls_id": 3000361, "address": "51668 Edgewood St", "rank": 2, "similarity": 0.725306604613167}, {"mls_id": 3000493, "address": "13330 Hamilton Ave", "rank": 3, "similarity": 0.7227216493291384}, {"mls_id": 3000260, "address": "88081 Hillcrest Dr", "rank": 4, "similarity": 0.7194126053169322}, {"mls_id": 3000018, "address": "95077 Maple Dr #205", "rank": 5, "similarity": 0.7163456453496231}, {"mls_id": 3000459, "address": "68069 Hillcrest Dr #159", "rank": 6, "similarity": 0.7158372405017057}, {"mls_id": 3000221, "address": "6447 Fair Oaks St #209", "rank": 7, "similarity": 0.7157636692813336}, {"mls_id": 3000066, "address": "63972 Vine Pl #220", "rank": 8, "similarity": 0.7139024641919223}, {"mls_id": 3000106, "address": "64209 Alameda Ct #351", "rank": 9, "similarity": 0.713268092820875}, {"mls_id": 3000093, "address": "50032 Vine Way", "rank": 10, "similarity": 0.7132576032148418}]}, {"key": "accessible", "label": "Single-story home", "query": "a single-story home", "type": "ungraded", "rows": [{"mls_id": 3000103, "address": "80670 Hudson Ave", "rank": 1, "similarity": 0.7021201481388395}, {"mls_id": 3000099, "address": "78360 Spring Ct", "rank": 2, "similarity": 0.6886202332611957}, {"mls_id": 3000049, "address": "84241 Brewster Ct #268", "rank": 3, "similarity": 0.6855083805869793}, {"mls_id": 3000433, "address": "7119 Woodside Ln #7", "rank": 4, "similarity": 0.6853865751976285}, {"mls_id": 3000229, "address": "70132 Roosevelt Ln", "rank": 5, "similarity": 0.6833664922833391}, {"mls_id": 3000455, "address": "46886 Grand Dr #83", "rank": 6, "similarity": 0.6824484802875713}, {"mls_id": 3000061, "address": "91507 Grand Ln #378", "rank": 7, "similarity": 0.6809937158950826}, {"mls_id": 3000063, "address": "18435 Redwood Pl", "rank": 8, "similarity": 0.6807748103320663}, {"mls_id": 3000236, "address": "1013 Hamilton St", "rank": 9, "similarity": 0.6806110821401848}, {"mls_id": 3000254, "address": "13972 Hillcrest Pl #233", "rank": 10, "similarity": 0.6797503885322916}]}, {"key": "hoa_condo", "label": "Condo with HOA maintenance", "query": "a condo with HOA-covered maintenance", "type": "ungraded", "rows": [{"mls_id": 3000377, "address": "34544 Fair Oaks Ave #77", "rank": 1, "similarity": 0.7044580375608174}, {"mls_id": 3000258, "address": "26286 Cypress Way", "rank": 2, "similarity": 0.7017791790562219}, {"mls_id": 3000468, "address": "29197 Cypress Dr", "rank": 3, "similarity": 0.6979867230949507}, {"mls_id": 3000313, "address": "12122 Selby Pl", "rank": 4, "similarity": 0.6970506683747342}, {"mls_id": 3000445, "address": "15016 Maple Dr", "rank": 5, "similarity": 0.6969469891233483}, {"mls_id": 3000033, "address": "70273 Redwood Way", "rank": 6, "similarity": 0.6957783188820625}, {"mls_id": 3000414, "address": "30189 Maple Pl", "rank": 7, "similarity": 0.689815903151979}, {"mls_id": 3000126, "address": "88672 Spring Way", "rank": 8, "similarity": 0.6892311027901253}, {"mls_id": 3000167, "address": "10496 Alameda St", "rank": 9, "similarity": 0.68913929097291}, {"mls_id": 3000426, "address": "85319 Charter Way #367", "rank": 10, "similarity": 0.6863499458857335}]}, {"key": "newer", "label": "Newer construction (2000+)", "query": "newer construction, built after 2000", "type": "ungraded", "rows": [{"mls_id": 3000063, "address": "18435 Redwood Pl", "rank": 1, "similarity": 0.5834985074953181}, {"mls_id": 3000258, "address": "26286 Cypress Way", "rank": 2, "similarity": 0.5820737711827996}, {"mls_id": 3000021, "address": "70864 Spring St", "rank": 3, "similarity": 0.5803238899233434}, {"mls_id": 3000096, "address": "26782 Spring Ave", "rank": 4, "similarity": 0.5798975303202691}, {"mls_id": 3000483, "address": "75769 Hopkins St", "rank": 5, "similarity": 0.5795789548931902}, {"mls_id": 3000447, "address": "52520 Maple Rd #293", "rank": 6, "similarity": 0.5793169768695512}, {"mls_id": 3000294, "address": "64433 Cypress Dr", "rank": 7, "similarity": 0.5760807084189729}, {"mls_id": 3000257, "address": "74641 Cedar Rd", "rank": 8, "similarity": 0.5758979280717552}, {"mls_id": 3000426, "address": "85319 Charter Way #367", "rank": 9, "similarity": 0.5745054959369802}, {"mls_id": 3000152, "address": "22798 Spring Ave", "rank": 10, "similarity": 0.5732575483180367}]}, {"key": "large_lot", "label": "Large lot (8,000+ sqft)", "query": "a lot of at least 8,000 sqft", "type": "ungraded", "rows": [{"mls_id": 3000322, "address": "68089 Maple Way", "rank": 1, "similarity": 0.6383440023684668}, {"mls_id": 3000195, "address": "63581 Fair Oaks Ave", "rank": 2, "similarity": 0.631238276343369}, {"mls_id": 3000352, "address": "34513 Buckingham Pl", "rank": 3, "similarity": 0.6299630596316691}, {"mls_id": 3000268, "address": "1438 Edgewood St", "rank": 4, "similarity": 0.6289239047163054}, {"mls_id": 3000090, "address": "84458 Redwood Ct", "rank": 5, "similarity": 0.6271752130218404}, {"mls_id": 3000398, "address": "32672 Poplar Rd", "rank": 6, "similarity": 0.6264115831897137}, {"mls_id": 3000133, "address": "43902 Alameda St", "rank": 7, "similarity": 0.6262102803358616}, {"mls_id": 3000083, "address": "55163 Jefferson Dr", "rank": 8, "similarity": 0.6250838989580216}, {"mls_id": 3000339, "address": "15447 Vine Ave #362", "rank": 9, "similarity": 0.6239445196355021}, {"mls_id": 3000469, "address": "20130 Hopkins Ct", "rank": 10, "similarity": 0.6237020774676146}]}, {"key": "not_ranch", "label": "Not a ranch style (negation)", "query": "definitely not a ranch-style home", "type": "ungraded", "rows": [{"mls_id": 3000145, "address": "64818 Fair Oaks St", "rank": 1, "similarity": 0.6611501272463263}, {"mls_id": 3000448, "address": "36375 Alameda Way", "rank": 2, "similarity": 0.6580690794991964}, {"mls_id": 3000161, "address": "95279 Douglas St", "rank": 3, "similarity": 0.6579773381262498}, {"mls_id": 3000049, "address": "84241 Brewster Ct #268", "rank": 4, "similarity": 0.6576873785670975}, {"mls_id": 3000399, "address": "97884 Vera Rd", "rank": 5, "similarity": 0.6544234839183699}, {"mls_id": 3000232, "address": "55714 Warren Way", "rank": 6, "similarity": 0.653681751153065}, {"mls_id": 3000100, "address": "3949 Stambaugh St #54", "rank": 7, "similarity": 0.6529092409922701}, {"mls_id": 3000329, "address": "72844 Roosevelt Way", "rank": 8, "similarity": 0.6512905077366631}, {"mls_id": 3000345, "address": "16094 Selby Ave", "rank": 9, "similarity": 0.6507718301547519}, {"mls_id": 3000055, "address": "88884 Alma Ave", "rank": 10, "similarity": 0.6505973984850231}]}, {"key": "good_schools", "label": "Highly rated schools", "query": "highly rated schools for my kids", "type": "ungraded", "rows": [{"mls_id": 3000419, "address": "10791 Elm Ln", "rank": 1, "similarity": 0.5204190500407972}, {"mls_id": 3000019, "address": "54242 Cedar Ave", "rank": 2, "similarity": 0.5203143863807412}, {"mls_id": 3000480, "address": "32178 Hamilton Ln", "rank": 3, "similarity": 0.5109612527770117}, {"mls_id": 3000165, "address": "32362 Poplar Ct", "rank": 4, "similarity": 0.509467326685717}, {"mls_id": 3000189, "address": "58520 Douglas Rd", "rank": 5, "similarity": 0.5094643479689877}, {"mls_id": 3000094, "address": "3862 Hamilton Dr", "rank": 6, "similarity": 0.5046214603068303}, {"mls_id": 3000425, "address": "90869 Hillcrest Way", "rank": 7, "similarity": 0.5008402219067778}, {"mls_id": 3000089, "address": "99848 Stambaugh Ct", "rank": 8, "similarity": 0.5002207611685521}, {"mls_id": 3000434, "address": "4896 Redwood St", "rank": 9, "similarity": 0.49974778133648523}, {"mls_id": 3000388, "address": "11784 Charter Rd", "rank": 10, "similarity": 0.4995925071807829}]}, {"key": "renovated", "label": "Updated kitchen", "query": "an updated kitchen", "type": "ungraded", "rows": [{"mls_id": 3000380, "address": "53262 Redwood Ln", "rank": 1, "similarity": 0.5959007209647056}, {"mls_id": 3000206, "address": "88124 Edgewood Way #177", "rank": 2, "similarity": 0.5934112368548411}, {"mls_id": 3000208, "address": "81041 Cedar St", "rank": 3, "similarity": 0.5917843003605116}, {"mls_id": 3000139, "address": "84051 Hopkins Rd", "rank": 4, "similarity": 0.5898184487661918}, {"mls_id": 3000089, "address": "99848 Stambaugh Ct", "rank": 5, "similarity": 0.5886612499869976}, {"mls_id": 3000194, "address": "29586 Roosevelt Ave #13", "rank": 6, "similarity": 0.5885254178026518}, {"mls_id": 3000335, "address": "17267 Alameda Dr", "rank": 7, "similarity": 0.5849638306787858}, {"mls_id": 3000373, "address": "26142 Roosevelt Pl", "rank": 8, "similarity": 0.5840018469575875}, {"mls_id": 3000187, "address": "82828 Cedar St", "rank": 9, "similarity": 0.5831697086245591}, {"mls_id": 3000171, "address": "91676 Cordilleras Ct", "rank": 10, "similarity": 0.5828518971667547}]}], "note": "No ground truth exists for 'generated' \u2014 golden_dataset.py's labels are specific to realistic_listings.json's 14 fixed listings. This shows the top 10 real results per query at real scale, not an accuracy grade."}</script>
+<script>
+(function () {
+  const data = JSON.parse(document.getElementById('eval-data').textContent);
+  const caseLabel = { positive: 'Positive', negative: 'Negative' };
+
+  function pct(n) { return n === null || n === undefined ? '—' : Math.round(n) + '%'; }
+  function esc(s) {
+    return (s === null || s === undefined ? '' : String(s)).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  }
+
+  document.getElementById('meta-line').innerHTML =
+    `Dataset: <code>${esc(data.dataset)}</code> — ${data.listing_count} listings &middot; mode: <code>${esc(data.mode)}</code> &middot; generated ${esc(new Date(data.generated_at).toLocaleString())}`;
+  document.getElementById('method-note').innerHTML = `<strong>Methodology</strong> — ${esc(data.note)}`;
+
+  if (data.mode === 'graded') {
+    document.getElementById('stat-section').innerHTML = `
+      <div class="stat-row">
+        <div class="stat-tile"><div class="label">Overall accuracy</div><div class="value">${pct(data.overall.accuracy)}</div><div class="sub">${data.overall.correct}/${data.overall.total} cases</div></div>
+        <div class="stat-tile"><div class="label">Total cases</div><div class="value">${data.overall.total}</div><div class="sub">positive + negative</div></div>
+        <div class="stat-tile"><div class="label">Correct</div><div class="value">${data.overall.correct}</div></div>
+        <div class="stat-tile"><div class="label">Incorrect</div><div class="value">${data.overall.total - data.overall.correct}</div></div>
+      </div>`;
+  }
+
+  const container = document.getElementById('dimensions');
+  data.dimensions.forEach(dim => {
+    if (data.mode === 'graded') {
+      const stats = dim.stats;
+      const correctPct = stats.total ? (stats.correct / stats.total * 100) : 0;
+      const incorrectPct = stats.total ? 100 - correctPct : 0;
+
+      let html = `<div class="card">
+        <h2>${esc(dim.label)} <span style="color:var(--text-muted);font-weight:400">— ${pct(stats.accuracy)}</span></h2>
+        <div class="query">query: <code>${esc(dim.query)}</code></div>
+        <div class="bar-row">
+          <div class="bar-track">
+            ${correctPct > 0 ? `<span class="bar-seg good" style="width:${correctPct}%"></span>` : ''}
+            ${incorrectPct > 0 ? `<span class="bar-seg critical" style="width:${incorrectPct}%"></span>` : ''}
+          </div>
+          <span class="bar-pct">${pct(stats.accuracy)}</span>
+        </div>
+        <div class="legend">
+          <span><span class="dot" style="background:var(--status-good)"></span>Correct</span>
+          <span><span class="dot" style="background:var(--status-critical)"></span>Incorrect</span>
+        </div>
+        <div class="case-breakdown">`;
+      Object.keys(stats.by_case).forEach(caseKey => {
+        const c = stats.by_case[caseKey];
+        html += `<span>${esc(caseLabel[caseKey] || caseKey)}: <b>${c.correct}/${c.total}</b></span>`;
+      });
+      html += '</div>';
+
+      html += '<div class="table-wrap"><table><thead><tr>' +
+        '<th>Rank</th><th>MLS ID</th><th>Address</th><th>Case</th><th>Expected</th><th>Predicted</th><th>Similarity</th><th>Result</th>' +
+        '</tr></thead><tbody>';
+      dim.rows.forEach(r => {
+        html += `<tr>
+          <td class="num">${r.rank}</td>
+          <td class="num">${r.mls_id}</td>
+          <td>${esc(r.address || '—')}</td>
+          <td><span class="chip">${esc(caseLabel[r.case] || r.case)}</span></td>
+          <td>${esc(r.expected)}</td>
+          <td>${esc(r.predicted)}</td>
+          <td class="num">${(r.similarity * 100).toFixed(1)}%</td>
+          <td>${r.pass ? '<span class="badge pass">✓ PASS</span>' : '<span class="badge fail">✗ FAIL</span>'}</td>
+        </tr>`;
+      });
+      html += '</tbody></table></div>';
+
+      if (dim.excluded && dim.excluded.length) {
+        html += `<div class="excluded">Excluded as ambiguous in the source data (not counted above): ` +
+          dim.excluded.map(e => `#${e.mls_id} ${esc(e.address || '')}`).join(', ') + '</div>';
+      }
+      html += '</div>';
+      container.insertAdjacentHTML('beforeend', html);
+    } else {
+      // ungraded — just show the real top-10 ranked results, no verdict
+      let html = `<div class="card">
+        <h2>${esc(dim.label)}</h2>
+        <div class="query">query: <code>${esc(dim.query)}</code></div>
+        <div class="table-wrap"><table><thead><tr>
+          <th>Rank</th><th>MLS ID</th><th>Address</th><th>Similarity</th>
+        </tr></thead><tbody>`;
+      dim.rows.forEach(r => {
+        html += `<tr>
+          <td class="num">${r.rank}</td>
+          <td class="num">${r.mls_id}</td>
+          <td>${esc(r.address || '—')}</td>
+          <td class="num">${(r.similarity * 100).toFixed(1)}%</td>
+        </tr>`;
+      });
+      html += '</tbody></table></div></div>';
+      container.insertAdjacentHTML('beforeend', html);
+    }
+  });
+})();
+</script>
+</body>
+</html>
