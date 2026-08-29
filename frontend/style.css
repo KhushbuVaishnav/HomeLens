@@ -307,10 +307,11 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 4px 0 8px;
-  color: var(--muted-dim);
+  margin: 10px 0 12px;
+  color: var(--smart);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 14px;
+  font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -320,7 +321,8 @@ button {
   content: "";
   flex: 1;
   height: 1px;
-  background: var(--line);
+  background: var(--smart);
+  opacity: 0.35;
 }
 
 .mode-selector__option--full {
@@ -336,18 +338,13 @@ button {
 
 .mode-selector__option--full .mode-selector__option-title {
   font-family: var(--font-display);
-  font-size: 13.5px;
+  font-size: 14.5px;
   font-weight: 700;
+  color: var(--brass-bright);
 }
 
 .mode-selector__option--full .mode-selector__hint {
   margin-top: 0;
-  font-weight: 600;
-  color: var(--muted);
-}
-
-.mode-selector__option--full.mode-selector__option--active .mode-selector__hint {
-  color: var(--paper);
 }
 
 .mode-selector__option {
