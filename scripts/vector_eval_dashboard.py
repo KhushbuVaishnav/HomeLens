@@ -136,6 +136,83 @@ def _dimension_stats(dim_result: dict) -> dict:
     return {"total": total, "correct": correct, "accuracy": (100 * correct / total) if total else None, "by_case": by_case}
 
 
+# Hand-tagged, one-line "why" for dimensions that land outside the
+# reliable band — grounded in real, separate tests run earlier (a direct
+# embedding-similarity comparison on the actual listing text), not
+# guessed from the accuracy number alone. Falls back to a generic note
+# for any dimension not explicitly tagged here, so a future addition to
+# golden_dataset.py never silently renders with no explanation.
+_WEAKNESS_NOTES = {
+    "not_ranch": (
+        "Negation. \"not a ranch-style home\" and \"a ranch-style home\" share almost "
+        "all their vocabulary — cosine similarity measures topical closeness, not "
+        "logical inversion, so it barely tells them apart. Confirmed directly: the "
+        "actual Ranch listing scored HIGHER similarity than the correct non-Ranch match."
+    ),
+    "accessible": (
+        "Two distinct, verified failure modes, not one. False positives: every "
+        "misclassified 2-story listing describes one room as being on \"the main "
+        "floor/level\" while the rest is upstairs — the embedding latches onto \"main "
+        "floor\" as similar to \"single-story\" even though the listing is explicitly "
+        "multi-level with stairs. False negatives: a genuinely single-story CONDO that "
+        "literally says \"single-level unit with no interior stairs\" still ranked low — "
+        "likely the query says \"home,\" the listing says \"unit,\" and that word choice "
+        "costs similarity even when the underlying fact is stated in plain language; "
+        "other misses simply never mention stories/stairs at all."
+    ),
+    "quiet": (
+        "Same directional-distinction pattern as single-story: \"quiet\" and \"busy\" "
+        "street descriptions share enough vocabulary (street, traffic, neighborhood) "
+        "that the embedding doesn't cleanly separate which one was actually asked for — "
+        "every negative case in this run was misclassified."
+    ),
+}
+_DEFAULT_WEAKNESS_NOTE = "Below the reliable band in this run — no specific cause investigated yet."
+
+_STRENGTH_NOTES = {
+    "caltrain": "A specific, distinctive proper-noun landmark — either mentioned or not, a clean topical signal.",
+    "hoa_condo": "A distinctive categorical concept (condo + HOA language) with little vocabulary overlap with the negative cases.",
+    "large_lot": (
+        "100% by rank here, but worth a caveat: an earlier direct pairwise test on two "
+        "specific listings found the raw similarity margin for this exact threshold "
+        "razor-thin (65.9% vs. 66.0%) — accuracy holds at this sample size, not "
+        "necessarily a wide safety margin."
+    ),
+}
+_DEFAULT_STRENGTH_NOTE = "Reliable in this run."
+
+
+def _build_insights(dims: list[dict], overall_total: int) -> dict:
+    """Everything here is computed from this run's real numbers — only the
+    WHY text is hand-written, grounded in separate tests already run this
+    session, not derived from the accuracy figures alone."""
+    combined_case_count = sum(len(c["cases"]) for c in gd.COMBINED_CASES)
+    full_eval_dashboard_total = overall_total + combined_case_count
+
+    good = [d for d in dims if d["stats"]["accuracy"] is not None and d["stats"]["accuracy"] >= 85]
+    weak = [d for d in dims if d["stats"]["accuracy"] is not None and d["stats"]["accuracy"] < 70]
+
+    return {
+        "case_count_note": (
+            f"This dashboard grades {overall_total} cases — eval_dashboard.py (the AI-scored "
+            f"modes) grades {full_eval_dashboard_total}. The {combined_case_count}-case gap is "
+            f"exactly the {len(gd.COMBINED_CASES)} combined multi-requirement cases (2-5 "
+            f"requirements each) — see 'Not supported at all' below for why those aren't graded here."
+        ),
+        "good_at": [{"label": d["label"], "accuracy": d["stats"]["accuracy"], "why": _STRENGTH_NOTES.get(d["key"], _DEFAULT_STRENGTH_NOTE)} for d in good],
+        "weak_at": [{"label": d["label"], "accuracy": d["stats"]["accuracy"], "why": _WEAKNESS_NOTES.get(d["key"], _DEFAULT_WEAKNESS_NOTE)} for d in weak],
+        "not_supported": (
+            "Compound, multi-clause requirements (e.g. \"quiet street, a home office, no "
+            "stairs, not a ranch, and a large lot\") — not just lower accuracy, structurally "
+            "ungraded. A single embedding of a compound query is ONE holistic similarity "
+            "number; it can't be decomposed back into \"3 of 5 requirements met\" the way "
+            "the AI-scored modes' per-requirement breakdown can. The AI-scored dashboard "
+            f"grades all {combined_case_count} of these cases; vector search has no valid "
+            "way to be graded on them at all."
+        ),
+    }
+
+
 def run_graded_eval(data_source: str) -> dict:
     if data_source != "realistic":
         print(
@@ -176,6 +253,7 @@ def run_graded_eval(data_source: str) -> dict:
             "compound-query embedding can't be decomposed into a per-requirement met/total "
             "breakdown the way the AI-scored modes' output can."
         ),
+        "insights": _build_insights(dims, overall_total),
     }
 
 
