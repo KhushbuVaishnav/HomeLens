@@ -762,27 +762,27 @@ function App() {
               className={`mode-selector__option${searchMode === "traditional" ? " mode-selector__option--active" : ""}`}
               onClick={() => setSearchMode("traditional")}
             >
-              Traditional
+              <span className="mode-selector__option-title">Traditional</span>
               <span className="mode-selector__hint">Filters only, no AI</span>
             </button>
             <button
               type="button"
               role="tab"
               aria-selected={searchMode === "ai_assisted"}
-              className={`mode-selector__option${searchMode === "ai_assisted" ? " mode-selector__option--active" : ""}`}
+              className={`mode-selector__option mode-selector__option--llm${searchMode === "ai_assisted" ? " mode-selector__option--active" : ""}`}
               onClick={() => setSearchMode("ai_assisted")}
             >
-              Filters + AI
+              <span className="mode-selector__option-title">Filters + AI</span>
               <span className="mode-selector__hint">Narrow, then let AI match</span>
             </button>
             <button
               type="button"
               role="tab"
               aria-selected={searchMode === "nlp_only"}
-              className={`mode-selector__option${searchMode === "nlp_only" ? " mode-selector__option--active" : ""}`}
+              className={`mode-selector__option mode-selector__option--llm${searchMode === "nlp_only" ? " mode-selector__option--active" : ""}`}
               onClick={() => setSearchMode("nlp_only")}
             >
-              AI only
+              <span className="mode-selector__option-title">AI only</span>
               <span className="mode-selector__hint">Just describe it</span>
             </button>
             <button
@@ -792,8 +792,8 @@ function App() {
               className={`mode-selector__option mode-selector__option--vector${searchMode === "vector" ? " mode-selector__option--active" : ""}`}
               onClick={() => setSearchMode("vector")}
             >
-              Vector search
-              <span className="mode-selector__hint">Experimental — no AI reasoning</span>
+              <span className="mode-selector__option-title">Vector search</span>
+              <span className="mode-selector__hint">Similarity search — no AI reasoning</span>
             </button>
           </div>
 
@@ -812,8 +812,8 @@ function App() {
             className={`mode-selector__option mode-selector__option--smart mode-selector__option--full${searchMode === "smart" ? " mode-selector__option--active" : ""}`}
             onClick={() => setSearchMode("smart")}
           >
-            <span className="mode-selector__option-title">Smart search</span>
-            <span className="mode-selector__hint">Give filters, text, or both — the agent picks Traditional, Vector search, or AI-scored matching for you</span>
+            <span className="mode-selector__option-title">Agent search</span>
+            <span className="mode-selector__hint">Nothing here is required — filters, text, both, or neither. The agent figures out the best way to search whatever you give it.</span>
           </button>
 
           {searchMode !== "nlp_only" && searchMode !== "vector" && (
@@ -1039,7 +1039,7 @@ function App() {
           </div>
         </form>
 
-        <section>
+        <section className="results-panel">
           {status === "error" && (
             <div className="error-banner">
               <p className="error-banner__title">Something went wrong</p>

@@ -40,26 +40,21 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Faint blueprint grid, with a USA state-outline watermark further back.
-   State outlines are the actual public-domain Wikimedia Commons
-   Blank_US_Map.svg boundary data (see frontend/usa-map-bg.svg) -- real
-   geography, not a generic placeholder, styled to read as a faint
-   architectural line drawing behind the grid rather than compete with
-   foreground content. The map layer uses "scroll" attachment (unlike the
-   grid) deliberately: "fixed" ties background-position to the viewport,
-   so on a short browser window "center 80px" leaves almost no margin
-   above the northern state borders -- looks cut off at the top. "scroll"
-   ties it to the page instead, so the top margin is consistent regardless
-   of viewport height. */
+/* Faint blueprint grid — the USA state-outline watermark is a SEPARATE
+   layer, on .results-panel below, not here. It used to live on body,
+   centered across the full page width, which put its left half directly
+   under the opaque spec-panel column -- only ever showing its right half
+   next to the results. Scoping it to .results-panel instead means
+   "centered" is relative to that column alone, so the whole map is
+   actually visible where the map has room to show: the results side. */
 body {
   background-image:
     linear-gradient(var(--line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--line) 1px, transparent 1px),
-    url("usa-map-bg.svg");
-  background-size: 48px 48px, 48px 48px, min(1400px, 120vw) auto;
-  background-position: 0 0, 0 0, center 110px;
-  background-repeat: repeat, repeat, no-repeat;
-  background-attachment: fixed, fixed, scroll;
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 48px 48px, 48px 48px;
+  background-position: 0 0, 0 0;
+  background-repeat: repeat, repeat;
+  background-attachment: fixed, fixed;
   background-color: var(--ink);
   opacity: 1;
 }
@@ -229,7 +224,7 @@ button {
   margin: 0 auto;
   padding: 32px 24px 80px;
   display: grid;
-  grid-template-columns: 400px 1fr;
+  grid-template-columns: 580px 1fr;
   gap: 28px;
   align-items: start;
 }
@@ -266,6 +261,30 @@ button {
     position: static;
     max-height: none;
     overflow-y: visible;
+  }
+}
+
+/* USA map watermark — scoped here instead of body (see the comment on
+   body's own background rule above) so it's centered within, and fully
+   visible inside, the results column, not truncated by the spec-panel
+   sitting on top of its left half. */
+.results-panel {
+  position: relative;
+  background-image: url("usa-map-bg.svg");
+  background-size: min(1100px, 100%) auto;
+  background-position: center 40px;
+  background-repeat: no-repeat;
+  background-attachment: scroll;
+  /* The SVG's own viewBox is 1000x600 (1.667:1) — at the 1100px size cap
+     above, that renders ~660px tall. min-height needs to clear that PLUS
+     the 40px top offset, or the box just clips the map's southern states
+     off at the bottom rather than showing the whole thing. */
+  min-height: 760px;
+}
+
+@media (max-width: 860px) {
+  .results-panel {
+    background-image: none;
   }
 }
 
@@ -308,7 +327,7 @@ button {
   align-items: center;
   gap: 10px;
   margin: 10px 0 12px;
-  color: var(--smart);
+  color: var(--brass-bright);
   font-family: var(--font-mono);
   font-size: 14px;
   font-weight: 700;
@@ -321,7 +340,7 @@ button {
   content: "";
   flex: 1;
   height: 1px;
-  background: var(--smart);
+  background: var(--brass-bright);
   opacity: 0.35;
 }
 
@@ -338,9 +357,9 @@ button {
 
 .mode-selector__option--full .mode-selector__option-title {
   font-family: var(--font-display);
-  font-size: 14.5px;
+  font-size: 17px;
   font-weight: 700;
-  color: var(--brass-bright);
+  color: var(--smart);
 }
 
 .mode-selector__option--full .mode-selector__hint {
@@ -354,7 +373,7 @@ button {
   padding: 10px 8px;
   color: var(--paper);
   font-family: var(--font-display);
-  font-size: 12.5px;
+  font-size: 14.5px;
   font-weight: 700;
   cursor: pointer;
   text-align: center;
@@ -382,11 +401,36 @@ button {
   border-color: var(--smart);
 }
 
+/* Title color signals which of the 4 method groups a mode belongs to:
+   Traditional stays plain (no group color — it's the neutral baseline),
+   Filters+AI/AI only share --blueprint (both are LLM matching, just with
+   or without a filter pre-pass), Vector search keeps --vector, Smart
+   search keeps --brass-bright (set separately, on .mode-selector__option--full). */
+.mode-selector__option--llm .mode-selector__option-title {
+  color: var(--blueprint);
+}
+
+.mode-selector__option--vector .mode-selector__option-title {
+  color: var(--vector);
+}
+
+/* Once LLM/Vector are selected, their own background already carries the
+   group color (blueprint-dim fill, or a tinted vector wash) — a
+   same-hue title on top of that reads poorly (blue-on-blue), so revert
+   to plain white on selection instead of doubling up the accent. Smart
+   search is deliberately excluded — its active background is a light
+   translucent tint, not a solid same-hue fill, so its gold title stays
+   legible and keeps its distinct identity even when selected. */
+.mode-selector__option--llm.mode-selector__option--active .mode-selector__option-title,
+.mode-selector__option--vector.mode-selector__option--active .mode-selector__option-title {
+  color: var(--paper);
+}
+
 .mode-selector__hint {
   display: block;
   margin-top: 3px;
   font-family: var(--font-body);
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
   color: var(--paper);
 }
