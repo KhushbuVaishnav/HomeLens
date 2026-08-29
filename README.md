@@ -4,7 +4,8 @@ A real-estate listing search POC. Search single-family/condo listings with
 structured filters (price, beds, schools, HOA, accessibility), then have an
 LLM re-rank results by reading each listing's actual description against a
 buyer's freeform preferences — plus a fourth, experimental mode that ranks
-by embedding similarity instead, with no LLM call at all.
+by embedding similarity instead, with no LLM call at all, and a fifth mode
+where an agent picks whichever of the other three fits the query best.
 
 FastAPI backend, dependency-free React frontend (React + Babel via CDN, no
 build step), SQLite for structured data. Three interchangeable AI providers
@@ -18,10 +19,12 @@ build step), SQLite for structured data. Three interchangeable AI providers
 | **Filters + AI** | Hard filters, then AI re-ranks the result by preferences | LLM, batched | `POST /match` |
 | **AI-only** | None — preferences drive everything | LLM, batched | `POST /match` (filters nulled) |
 | **Vector search** *(experimental)* | None | Embedding similarity, no LLM | `POST /vector-search` |
+| **Smart search** *(agent-routed)* | Optional, passed through unchanged | One small classify call, then dispatches to one of the 3 rows above | `POST /smart-search/classify`, then whichever endpoint it names |
 
 Filters+AI and AI-only run as a background job with progress polling (large
 datasets need many batched LLM calls); Traditional and Vector search are
-single synchronous requests.
+single synchronous requests. Smart search is two calls: the classify step,
+then a normal call into whichever mode above the classify step picked.
 
 ## Architecture
 
@@ -33,12 +36,14 @@ app/
 ├── routers/                   HTTP only — parse request, call a service, shape response
 │   ├── listings.py               POST /listings
 │   ├── match.py                  POST /match, /match/{job_id}
-│   └── vector_search.py          POST /vector-search
+│   ├── vector_search.py          POST /vector-search
+│   └── smart_search.py           POST /smart-search/classify
 ├── services/                  Actual logic — no HTTP awareness, callable from a script or test
 │   ├── listings_service.py       Fetch + filter, all data sources
-│   ├── matching_service.py       AI scoring — Anthropic/OpenAI/Vertex behind one switch
+│   ├── matching_service.py       AI scoring + query classification — Anthropic/OpenAI/Vertex behind one switch
 │   ├── schools_service.py        School ratings lookup (SQLite-backed)
-│   └── vector_service.py         Embedding + brute-force cosine similarity search
+│   ├── vector_service.py         Embedding + brute-force cosine similarity search
+│   └── router_service.py         Smart search's routing decision — pure logic, no I/O
 └── data/                       Datasets, schools DB, listing embeddings
 ```
 
@@ -130,6 +135,44 @@ sqft") aren't represented at all. These are well-documented limitations of
 dense embedding retrieval generally, not specific to this dataset — see
 `scripts/vector_eval_dashboard.py` for measured accuracy against ground
 truth, and `docs/architecture.md` §6 for the full design writeup.
+
+## Smart search (agent-routed)
+
+A 5th mode: give filters and/or freeform text, no rules enforced, and the
+app decides which of the other 3 modes actually handles the query —
+Traditional, Vector search, or AI-scored matching (Filters+AI/AI-only,
+whichever filters happen to be present) — then runs it and shows which
+one it picked and why. A deliberately simplified deep-agent pattern: it
+keeps an explicit plan (a real decomposition of the query into
+requirements) and a single reflect-and-revise step, while skipping
+sub-agent delegation and a scratchpad/filesystem — a single search fits
+in one context window, so that machinery would solve a problem this app
+doesn't have. See `docs/architecture.md` §8 for the full design rationale.
+
+**How it decides:**
+1. If there's no freeform text, route to **Traditional** — nothing to
+   reason about.
+2. Otherwise, one small LLM call (`POST /smart-search/classify`, no
+   listings payload) decomposes the text into requirement clauses, each
+   tagged `negated: true/false` — the same decomposition rule scoring
+   already uses. This is the "plan" step.
+3. `app/services/router_service.py`'s `decide_route()` — plain Python, not
+   the LLM — turns that into a decision: exactly one requirement, not
+   negated, routes to **Vector search**; multiple requirements and/or any
+   negation routes to **AI-scored matching**, since those are exactly the
+   cases vector search is known to handle poorly (see above).
+4. **Reflect once**: if Vector search comes back with zero matches, it
+   escalates automatically to AI-scored matching and re-runs, rather than
+   showing "nothing matched" for what may just be a misrouted query.
+5. If the classify call itself fails, it falls back directly to AI-scored
+   matching rather than failing the search over a planning-step error.
+
+The routing decision is always shown, not hidden — a badge above the
+results states which mode ran and why (e.g. "Routed to Vector search — 1
+requirement detected, no negation"), and the backend logs the same
+decision server-side. Filters, if given, pass through unchanged to
+whichever mode gets picked — nothing about the other 4 modes changes;
+this only adds a classification step in front of them.
 
 ## Schools
 

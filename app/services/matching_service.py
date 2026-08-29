@@ -92,6 +92,30 @@ Respond with ONLY a JSON array, no other text, in this exact shape:
 """
 
 
+CLASSIFY_SYSTEM_PROMPT = """You are analyzing a home buyer's freeform search text to identify its
+distinct requirements — no listings are involved here, do not judge or
+score anything, only decompose the text itself.
+
+Break the buyer's preferences into distinct, named requirements, using the
+same rule listing-scoring uses: "quiet cul-de-sac, near Caltrain, and away
+from the highway" is THREE requirements, not one — do not merge
+related-sounding ones together. If the text is too vague to break into
+multiple distinct asks (e.g. just "nice house" or "any"), return a single
+requirement summarizing it. If the text has no identifiable requirement at
+all, return an empty array.
+
+For each requirement, set "negated": true if it explicitly rules something
+OUT (e.g. "not a ranch-style home", "no HOA", "not on a busy street",
+"nothing older than 1990"), and "negated": false if it's asking for
+something positively.
+
+Respond with ONLY a JSON array, no other text, in this exact shape:
+[
+  {"text": "short label for the requirement", "negated": false}
+]
+"""
+
+
 def _build_listing_payload(listings_batch: list[dict]) -> list[dict]:
     return [
         {
@@ -630,6 +654,174 @@ def _score_batch_vertex(user_preferences: str, listings_batch: list[dict], on_re
     _log_token_usage("Vertex", len(listings_batch), input_tokens, output_tokens, _elapsed, cached_tokens=cached_tokens)
     _log_raw_output("Vertex", listings_batch, response.text)
     return _parse_response_text(response.text)
+
+
+def _classify_anthropic(preferences: str, on_retry=None) -> list[dict]:
+    import anthropic
+
+    if not settings.ANTHROPIC_API_KEY:
+        raise MatchingError(
+            _CLIENT_MSG_CONFIG,
+            "ANTHROPIC_API_KEY is not set — required to use Claude as the AI provider. Add it to .env, or select a different provider.",
+        )
+
+    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY, timeout=settings.REQUEST_TIMEOUT_SECONDS)
+
+    def call():
+        raw = client.messages.with_raw_response.create(
+            model=settings.ANTHROPIC_MODEL,
+            max_tokens=500,  # far smaller than scoring's MAX_TOKENS — this response is a short JSON array, no per-listing reasoning
+            temperature=settings.TEMPERATURE,
+            system=CLASSIFY_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": f"Buyer's text: {preferences}"}],
+        )
+        _log_rate_limit_headers("Anthropic", raw.headers)
+        return raw.parse()
+
+    try:
+        response = _retry_with_backoff(call, on_retry=on_retry)
+    except anthropic.RateLimitError as e:
+        raise MatchingError(_CLIENT_MSG_TRANSIENT, "Anthropic rate limit hit repeatedly even after retrying while classifying the query.") from e
+    except anthropic.APITimeoutError as e:
+        raise MatchingError(_CLIENT_MSG_TRANSIENT, f"Anthropic request timed out after {settings.REQUEST_TIMEOUT_SECONDS}s while classifying the query.") from e
+    except anthropic.APIConnectionError as e:
+        raise MatchingError(_CLIENT_MSG_TRANSIENT, "Couldn't establish a connection to Anthropic's API while classifying the query.") from e
+    except anthropic.AuthenticationError as e:
+        raise MatchingError(_CLIENT_MSG_CONFIG, "Anthropic authentication failed — check ANTHROPIC_API_KEY in .env.") from e
+    except anthropic.NotFoundError as e:
+        raise MatchingError(_CLIENT_MSG_CONFIG, f"Model '{settings.ANTHROPIC_MODEL}' not found or not available on your account.") from e
+    except anthropic.APIStatusError as e:
+        raise MatchingError(*_humanize_anthropic_error(e)) from e
+
+    return _parse_response_text(response.content[0].text)
+
+
+def _classify_openai(preferences: str, on_retry=None) -> list[dict]:
+    import openai
+    from openai import OpenAI, AuthenticationError, NotFoundError, APIStatusError, APITimeoutError, APIConnectionError
+
+    if not settings.OPENAI_API_KEY:
+        raise MatchingError(
+            _CLIENT_MSG_CONFIG,
+            "OPENAI_API_KEY is not set — required to use OpenAI as the AI provider. Add it to .env, or select a different provider.",
+        )
+
+    client = OpenAI(api_key=settings.OPENAI_API_KEY, timeout=settings.REQUEST_TIMEOUT_SECONDS)
+
+    def call():
+        kwargs = {
+            "model": settings.OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": CLASSIFY_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Buyer's text: {preferences}"},
+            ],
+            "max_completion_tokens": 500,
+        }
+        if settings.OPENAI_REASONING_EFFORT:
+            kwargs["reasoning_effort"] = settings.OPENAI_REASONING_EFFORT
+        if settings.OPENAI_REASONING_EFFORT == "none":
+            kwargs["temperature"] = settings.TEMPERATURE
+        raw = client.chat.completions.with_raw_response.create(**kwargs)
+        _log_rate_limit_headers("OpenAI", raw.headers)
+        return raw.parse()
+
+    try:
+        response = _retry_with_backoff(call, on_retry=on_retry)
+    except openai.RateLimitError as e:
+        raise MatchingError(_CLIENT_MSG_TRANSIENT, "OpenAI rate limit hit repeatedly even after retrying while classifying the query.") from e
+    except APITimeoutError as e:
+        raise MatchingError(_CLIENT_MSG_TRANSIENT, f"OpenAI request timed out after {settings.REQUEST_TIMEOUT_SECONDS}s while classifying the query.") from e
+    except APIConnectionError as e:
+        raise MatchingError(_CLIENT_MSG_TRANSIENT, "Couldn't establish a connection to OpenAI's API while classifying the query.") from e
+    except AuthenticationError as e:
+        raise MatchingError(_CLIENT_MSG_CONFIG, "OpenAI authentication failed — check OPENAI_API_KEY in .env.") from e
+    except NotFoundError as e:
+        raise MatchingError(_CLIENT_MSG_CONFIG, f"Model '{settings.OPENAI_MODEL}' not found or not available on your account.") from e
+    except APIStatusError as e:
+        raise MatchingError(*_humanize_openai_error(e)) from e
+
+    return _parse_response_text(response.choices[0].message.content)
+
+
+def _classify_vertex(preferences: str, on_retry=None) -> list[dict]:
+    from google import genai
+    from google.genai import errors as genai_errors
+    from google.genai import types as genai_types
+
+    if not settings.GCP_PROJECT_ID:
+        raise MatchingError(
+            _CLIENT_MSG_CONFIG,
+            "GCP_PROJECT_ID is not set — required to use Vertex AI (Gemini) as the AI provider. Add it to .env, or select a different provider.",
+        )
+
+    client = genai.Client(vertexai=True, project=settings.GCP_PROJECT_ID, location=settings.GCP_REGION)
+
+    def call():
+        return client.models.generate_content(
+            model=settings.VERTEX_MODEL,
+            contents=f"{CLASSIFY_SYSTEM_PROMPT}\n\nBuyer's text: {preferences}",
+            config=genai_types.GenerateContentConfig(
+                temperature=settings.TEMPERATURE,
+                response_mime_type="application/json",
+            ),
+        )
+
+    try:
+        response = _retry_with_backoff(call, on_retry=on_retry)
+    except genai_errors.APIError as e:
+        code = getattr(e, "code", None)
+        message = getattr(e, "message", str(e))
+        if code == 429:
+            raise MatchingError(_CLIENT_MSG_TRANSIENT, "Vertex AI rate limit hit repeatedly even after retrying while classifying the query.") from e
+        if code in (401, 403):
+            raise MatchingError(
+                _CLIENT_MSG_CONFIG,
+                f"Vertex AI authentication/permission failed ({code}): {message} — locally, run "
+                "`gcloud auth application-default login`; on Cloud Run, confirm the service's "
+                "identity has the 'Vertex AI User' IAM role on GCP_PROJECT_ID.",
+            ) from e
+        if code == 404:
+            raise MatchingError(
+                _CLIENT_MSG_CONFIG,
+                f"Model '{settings.VERTEX_MODEL}' not found or not available in region '{settings.GCP_REGION}' "
+                f"for project '{settings.GCP_PROJECT_ID}'.",
+            ) from e
+        raise MatchingError(_CLIENT_MSG_UNKNOWN, f"Vertex AI API error ({code}): {message}") from e
+
+    return _parse_response_text(response.text)
+
+
+def classify_query(preferences: str, ai_provider: str = None) -> list[dict]:
+    """Decomposes the buyer's freeform text into distinct requirement
+    clauses, each tagged negated true/false — the "plan" step for Smart
+    search (see app/routers/smart_search.py). No listings payload, no
+    scoring — this is purely about understanding the query's shape before
+    router_service.decide_route() picks a path. Returns [] without making
+    any API call when preferences is empty, since there's nothing to
+    classify.
+    """
+    if not preferences.strip():
+        return []
+
+    provider = ai_provider or settings.AI_PROVIDER
+    if provider not in VALID_AI_PROVIDERS:
+        raise ValueError(f"ai_provider must be one of {VALID_AI_PROVIDERS}, got '{provider}'")
+    if provider == "openai":
+        raw = _classify_openai(preferences)
+    elif provider == "vertex":
+        raw = _classify_vertex(preferences)
+    else:
+        raw = _classify_anthropic(preferences)
+
+    # Defensive normalization — a malformed or missing "negated" key
+    # shouldn't crash routing, so router_service can trust this shape
+    # unconditionally, same reasoning _compute_deterministic_scores
+    # already applies to the scoring response below.
+    return [
+        {"text": item.get("text", ""), "negated": bool(item.get("negated", False))}
+        for item in raw
+        if isinstance(item, dict)
+    ]
 
 
 def _compute_deterministic_scores(raw_items: list[dict]) -> list[dict]:

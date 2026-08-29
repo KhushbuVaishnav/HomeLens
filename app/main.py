@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings, VALID_DATA_SOURCES, VALID_AI_PROVIDERS
-from app.routers import listings, match, vector_search
+from app.routers import listings, match, vector_search, smart_search
 
 settings.validate()  # fail fast on misconfiguration (bad DATA_SOURCE, missing API key, etc.)
 
@@ -93,6 +93,7 @@ app.add_middleware(
 app.include_router(listings.router)
 app.include_router(match.router)
 app.include_router(vector_search.router)
+app.include_router(smart_search.router)
 
 
 @app.get("/")

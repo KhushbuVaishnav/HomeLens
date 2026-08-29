@@ -4,14 +4,19 @@
 database (`app/data/schools.db`) rather than a parsed JSON file — running
 against the `generated` data source (500+ synthetic listings, Redwood City).
 
-The frontend offers four explicit search modes:
+The frontend offers five explicit search modes:
 - **Traditional** — hard filters only, zero AI involvement
 - **Filters + AI** — hard filters narrow the pool, then AI scores what's left
 - **AI only** — pure natural language, zero hard filters
 - **Vector search (experimental)** — pure embedding-similarity ranking
   against listing descriptions, zero hard filters, **zero LLM calls at
   all**. A standalone learning/comparison tool sitting alongside the other
-  three, not a replacement for any of them — see §6.
+  four, not a replacement for any of them — see §6.
+- **Smart search (agent-routed)** — filters and/or freeform text, no rules
+  enforced on the input. A small LLM call decomposes the text into
+  requirements, then deterministic code — not the LLM — picks whichever of
+  the other three paths fits, runs it, and shows which one it picked and
+  why. See §8.
 
 Diagrams are [Mermaid](https://mermaid.js.org) — render natively on GitHub,
 GitLab, and most modern markdown viewers. Standalone `.mmd` files are in
@@ -38,6 +43,8 @@ flowchart LR
         UC7(Score a listing against<br/>buyer's preferences)
         UC8(Vector search — experimental<br/>rank by embedding similarity,<br/>zero LLM calls)
         UC9(Embed a listing description<br/>for similarity ranking)
+        UC10(Smart search — agent-routed<br/>classify, then dispatch to<br/>UC1, UC2/UC3, or UC8)
+        UC11(Classify a query into<br/>requirement clauses)
     end
 
     Buyer --> UC1
@@ -45,6 +52,7 @@ flowchart LR
     Buyer --> UC3
     Buyer --> UC6
     Buyer --> UC8
+    Buyer --> UC10
 
     UC2 -. include .-> UC7
     UC3 -. include .-> UC7
@@ -52,11 +60,18 @@ flowchart LR
     UC4 -. extend .-> UC3
     UC5 -. extend .-> UC7
     UC8 -. include .-> UC9
+    UC10 -. include .-> UC11
+    UC10 -. "dispatches to<br/>(one of)" .-> UC1
+    UC10 -. "dispatches to<br/>(one of)" .-> UC2
+    UC10 -. "dispatches to<br/>(one of)" .-> UC8
 
     UC7 --> Claude
     UC7 --> OpenAI
     UC7 --> Gemini
     UC9 --> Gemini
+    UC11 --> Claude
+    UC11 --> OpenAI
+    UC11 --> Gemini
 ```
 
 Traditional mode has no relationship to Cancel (UC4): it's a single, quick
@@ -70,20 +85,33 @@ Gemini specifically — Vector search deliberately always uses Vertex's
 embedding model regardless of which `AI_PROVIDER` is configured for
 scoring, since the point is learning Vertex's own embedding offering.
 
+UC11 (classify a query) goes to whichever provider `AI_PROVIDER` is
+currently set to — unlike UC9, there's no reason to pin this to one
+provider, since classification is a generic text-decomposition task, not
+something specific to Vertex. UC10 itself never directly calls an AI
+provider or a chat/completion model beyond that one small classify call
+— the actual search work is entirely delegated to whichever of UC1/UC2/
+UC3/UC8 the deterministic routing rule picks; UC10's diagram edges to
+UC2/UC3 are drawn as a single dispatch to UC2 for brevity (UC2 and UC3
+are the same underlying `/match` flow, differing only in whether filters
+are present — see §8).
+
 ---
 
 ## 2. Logical View
 
 ```mermaid
 flowchart TD
-    Frontend["app.jsx<br/>React SPA, static<br/>4 modes: Traditional / Filters+AI / AI-only / Vector search"]
+    Frontend["app.jsx<br/>React SPA, static<br/>5 modes: Traditional / Filters+AI / AI-only / Vector search / Smart search"]
     Main["main.py<br/>assembly"]
     ListingsRouter["listings.py<br/>router"]
     MatchRouter["match.py<br/>router"]
     VectorRouter["vector_search.py<br/>router"]
+    SmartRouter["smart_search.py<br/>router"]
     ListingsService["listings_service.py"]
-    MatchingService["matching_service.py"]
+    MatchingService["matching_service.py<br/>score_batch() + classify_query()"]
     VectorService["vector_service.py"]
+    RouterService["router_service.py<br/>decide_route() — pure logic, no I/O"]
     SchoolsService["schools_service.py<br/>SQLite-backed"]
     GeneratedData[("generated_listings.json<br/>500+ listings")]
     SchoolsData[("schools.db<br/>SQLite, real SQL queries")]
@@ -95,14 +123,18 @@ flowchart TD
     Frontend -->|Traditional mode| ListingsRouter
     Frontend -->|"Filters+AI or AI-only mode"| MatchRouter
     Frontend -->|"Vector search mode"| VectorRouter
+    Frontend -->|"Smart search mode<br/>(classify, then dispatches to<br/>whichever of the above the<br/>decision names)"| SmartRouter
     Main -. includes .-> ListingsRouter
     Main -. includes .-> MatchRouter
     Main -. includes .-> VectorRouter
+    Main -. includes .-> SmartRouter
     ListingsRouter --> ListingsService
     MatchRouter --> ListingsService
     MatchRouter --> MatchingService
     VectorRouter --> ListingsService
     VectorRouter --> VectorService
+    SmartRouter --> MatchingService
+    SmartRouter --> RouterService
     ListingsService --> SchoolsService
     ListingsService --> GeneratedData
     SchoolsService --> SchoolsData
@@ -122,6 +154,18 @@ Gemini's chat models, only Gemini's embedding model, and it does so
 regardless of whatever `AI_PROVIDER` is configured for scoring.
 `ListingsRouter` never imports `matching_service` either, so Traditional
 mode structurally cannot contact any AI provider at all.
+
+`SmartRouter` is deliberately thin and side-effect-free beyond its one
+small classify call: it calls `MatchingService.classify_query()` (a new,
+much smaller sibling of `score_batch()` — same provider dispatch, same
+error handling, no listings payload) and `RouterService.decide_route()`
+(pure Python, no I/O, no provider awareness), then returns the decision.
+It never imports `ListingsService`, `VectorService`, or runs `/match`
+itself — the actual search always happens through whichever of
+`ListingsRouter`/`MatchRouter`/`VectorRouter` the frontend calls next,
+based on the decision. This keeps `SmartRouter`'s own cost bounded to
+always just the one small classify call, and keeps the three existing
+search paths completely unmodified — Smart search is purely additive.
 
 ---
 
@@ -265,6 +309,58 @@ sequenceDiagram
     Note over FE,Router: One request, one response — no job_id, no polling,<br/>no matching_service import anywhere in this path.
 ```
 
+## 4d. Sequence Diagram — Smart Search (agent-routed)
+
+Two round trips to the backend, not one: a small, fast classify call
+first, then a normal call to whichever of the other 3 endpoints the
+decision names — the frontend, not the backend, does the dispatching, so
+each existing endpoint's own flow (§4a/§4b/§4c) runs completely unchanged.
+
+```mermaid
+sequenceDiagram
+    actor Buyer
+    participant FE as Frontend
+    participant SR as SmartRouter
+    participant MS as matching_service
+    participant RS as router_service
+    participant AI as Claude / OpenAI / Gemini
+    participant Next as ListingsRouter /<br/>MatchRouter /<br/>VectorRouter
+
+    Buyer->>FE: Enter filters and/or preferences,<br/>click "Find my matches" (Smart search mode)
+    FE->>SR: POST /smart-search/classify
+    activate SR
+    alt preferences is non-empty
+        SR->>MS: classify_query(preferences)
+        MS->>AI: small classify call — no listings payload
+        AI-->>MS: requirement clauses, each tagged negated true/false
+        MS-->>SR: requirements[]
+    else preferences is empty
+        SR->>SR: skip the AI call entirely — nothing to classify
+    end
+    SR->>RS: decide_route(preferences, requirements)
+    RS-->>SR: (route, reason) — deterministic, not LLM-decided
+    SR-->>FE: {route, reason, requirements}
+    deactivate SR
+    FE->>FE: show routing badge — "Routed to <route> — <reason>"
+
+    FE->>Next: dispatch to whichever endpoint `route` names<br/>(same filters + preferences, unchanged)
+    Next-->>FE: results, in that endpoint's own normal shape
+
+    opt route was "vector" and it returned zero matches
+        FE->>FE: reflect — update badge to "Escalated to AI-scored matching"
+        FE->>Next: POST /match/start (retry with the AI-scored path)
+        Next-->>FE: results
+    end
+
+    opt classify call itself failed
+        FE->>FE: fall back to AI-scored matching directly,<br/>reason: "Couldn't classify the query"
+        FE->>Next: POST /match/start
+        Next-->>FE: results
+    end
+
+    FE-->>Buyer: render result cards (same as the underlying<br/>mode's own rendering — Smart search adds<br/>only the routing badge on top)
+```
+
 ---
 
 ## 5. Security View
@@ -313,6 +409,7 @@ flowchart LR
 | 8 | Traditional mode has a stronger privacy profile | Never contacts Anthropic, OpenAI, or Vertex AI — structurally guaranteed, since `ListingsRouter` never imports `matching_service` |
 | 9 | Vertex AI's auth model has no static secret at all | Authenticates via Google Cloud's Application Default Credentials (local `gcloud auth application-default login`, or the Cloud Run service's own identity in production) — nothing resembling `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` exists for this provider, so there's no equivalent key to leak, rotate, or accidentally commit |
 | 10 | Vector search has an even narrower reach than the other AI-using modes | `VectorRouter` never imports `matching_service` — structurally cannot contact Anthropic or OpenAI at all, in either direction, regardless of `AI_PROVIDER`. Its only external call is Gemini's embedding model — never a chat/completion model, never sees or acts on anything resembling a prompt-injection surface the way `match_reason` generation does |
+| 11 | Smart search's classify step reaches the same 3 providers as scoring | `SmartRouter` imports `matching_service`, so it carries the same reach/cost profile as `MatchRouter` — no new external surface, just a smaller, cheaper call (no listings payload). It never imports `vector_service` or runs a search itself — routing is a decision only, execution always happens through the existing routers above, unchanged |
 
 ---
 
@@ -529,3 +626,93 @@ judge is not proof either is correct, since a shared blind spot produces
 confident agreement while both are wrong, and a disagreement-only review
 structurally can never catch that. Off by default; only takes effect
 together with `--review`.
+
+---
+
+## 8. Smart Search (agent-routed) — a simplified deep-agent pattern
+
+**Implemented**, as a 5th, standalone search mode. The goal: let a user
+give filters and/or freeform text with no rules enforced, and have the
+app itself decide which of the other 3 execution paths (Traditional,
+AI-scored matching, Vector search) actually handles the query — then run
+it and show which path was taken and why. Nothing about the other 4 modes
+changes; Smart search calls the exact same endpoints they already call,
+adding only a classification step in front and a dispatch decision.
+
+### Why "simplified deep agent," specifically
+
+The deep-agent pattern (as implemented by e.g. LangChain's `deepagents`,
+and structurally how Claude Code itself works) has four ingredients:
+**explicit planning** (externalize a plan as structured state, revise it
+as you learn more), **sub-agent delegation** (isolate sub-tasks in their
+own context windows), **a scratchpad/filesystem** (carry state past what
+fits in one context window), and **a detailed system prompt** (strategy
+as much as tooling). That combination exists to solve long-horizon tasks
+that don't fit in one context window and need revision as they go.
+
+A single HomeLens search doesn't have that problem — it fits comfortably
+in one context window, and there are only 3 possible destinations to pick
+from. So Smart search deliberately keeps only the two ingredients that
+still earn their cost here, and skips the two that would be solving a
+problem this app doesn't have:
+
+- **Kept — explicit plan.** `matching_service.classify_query()` really
+  decomposes the query into typed requirement clauses (reusing
+  `SYSTEM_PROMPT`'s own decomposition rule), not a single "vibe" judgment
+  — the same "quiet cul-de-sac, near Caltrain, and away from the highway
+  = three requirements" rule scoring already uses. This plan is returned
+  as real structured data (`requirements: [{text, negated}]`), not
+  hidden — see the routing badge below.
+- **Kept — reflect-and-revise.** If the Vector search path comes back
+  with zero matches, the frontend escalates once to AI-scored matching
+  and re-runs, updating the shown reason. One revision, triggered on an
+  unambiguous signal (zero results) — not an open-ended retry loop.
+- **Skipped — sub-agent delegation.** There's nothing here big enough to
+  need context isolation — one query, one classify call, one dispatch.
+  Splitting that across sub-agents would add coordination overhead for a
+  decision that fits in a few hundred tokens.
+- **Skipped — a scratchpad/filesystem.** No state needs to survive past
+  what a single request/response already carries — the routing decision
+  is returned once, consumed once, done.
+
+### The routing decision is deterministic code, not the LLM's call
+
+Same philosophy `matching_service._compute_deterministic_scores` already
+uses for scoring: the model extracts/observes (here, decomposes the query
+and flags negation), and plain Python — `router_service.decide_route()`
+— makes the actual decision from that. This is what keeps the rule
+inspectable and testable rather than a black box that might route
+differently for the same input on a different day:
+
+- No `preferences` text at all → **Traditional** — nothing to reason
+  about.
+- Exactly one requirement, not negated → **Vector search** — cheap, and
+  precisely the case vector search is good at (see §6's own measured
+  negation/compound-query weaknesses — this rule exists specifically to
+  route *around* them).
+- Multiple requirements and/or any negated → **AI-scored matching** —
+  more expensive, used specifically where vector search's known
+  weaknesses would otherwise bite.
+
+### Showing the decision, not hiding it
+
+Same pattern the vector-search eval dashboard and `llm_judge.py` already
+follow — surface *why*, not just a result. The `/smart-search/classify`
+response carries `{route, reason, requirements}` as real structured data;
+the frontend renders it as a badge above the results ("Routed to Vector
+search — 1 requirement detected, no negation"), and the backend logs one
+line per decision (`[smart-search] route=... reason=...`) for whoever's
+tuning the classifier.
+
+### What's deliberately unmeasured, and left that way for now
+
+The reflect step escalates only on **zero** vector-search matches, not a
+low-similarity threshold — there's no measured similarity-score
+distribution yet to justify a specific numeric cutoff, and this project's
+own norm all along has been to measure a threshold from real data before
+setting it (`SCORE_THRESHOLD` via `scripts/analyze_scores.py`,
+`MAX_CONCURRENT_BATCHES` via observed rate-limit headers). A future
+refinement could add a measured low-similarity escalation trigger the
+same way, once someone runs that analysis for vector search's similarity
+scores specifically — v1 ships with only the unambiguous, unguessed
+signal.

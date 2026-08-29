@@ -77,6 +77,15 @@ const AI_PROVIDER_LABELS = {
   vertex: "Gemini",
 };
 
+// Labels for Smart search's routing badge — keyed by the same route strings
+// router_service.decide_route() returns, so no separate mapping logic is
+// needed anywhere else.
+const ROUTE_LABELS = {
+  traditional: "Traditional",
+  vector: "Vector search",
+  match: "AI-scored matching",
+};
+
 const DEFAULT_FILTERS = {
   cities: "Redwood City",
   minPrice: "",
@@ -322,6 +331,7 @@ function App() {
   const [backendMeta, setBackendMeta] = useState(null);
   const [selectedDataSource, setSelectedDataSource] = useState(null);
   const [selectedAiProvider, setSelectedAiProvider] = useState(null);
+  const [routingDecision, setRoutingDecision] = useState(null); // Smart search only: {route, reason, requirements, escalated}
 
   useEffect(() => {
     fetch(`${API_BASE}/`)
@@ -362,6 +372,7 @@ function App() {
     setRetryReasons({});
     setFailedBatches(0);
     setWasCancelled(false);
+    setRoutingDecision(null);
   }, [searchMode]);
 
   // Keep the City field matching whichever source is active — e.g. a
@@ -417,12 +428,154 @@ function App() {
     setRetryReasons({});
     setFailedBatches(0);
     setWasCancelled(false);
+    setRoutingDecision(null);
+  }
+
+  // The three execution paths, extracted out of handleSubmit so Smart
+  // search's dispatch step can call whichever one its routing decision
+  // names, exactly like the manually-picked tabs below already do. No
+  // behavior change from before this extraction — same requests, same
+  // state updates.
+  async function runTraditionalSearch(filterBody, controller) {
+    const res = await fetch(`${API_BASE}/listings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(filterBody),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `Request failed (${res.status})`);
+    }
+    const data = await res.json();
+    setResults(data.listings || []);
+    setStatus("done");
+  }
+
+  // Deliberately does NOT call setResults/setStatus itself — returns the
+  // matches so Smart search can inspect the count first (to decide whether
+  // to escalate) before showing anything. The direct Vector search tab
+  // below sets them itself right after calling this.
+  async function runVectorSearch(filterBody, controller) {
+    const res = await fetch(`${API_BASE}/vector-search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filters: filterBody, preferences: preferences.trim() }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `Request failed (${res.status})`);
+    }
+    const data = await res.json();
+    return data.matches || [];
+  }
+
+  async function runMatchSearch(filterBody, controller) {
+    const startRes = await fetch(`${API_BASE}/match/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filters: filterBody,
+        preferences: preferences.trim(),
+        ai_provider: selectedAiProvider,
+      }),
+      signal: controller.signal,
+    });
+    if (!startRes.ok) {
+      const errData = await startRes.json().catch(() => ({}));
+      throw new Error(errData.detail || `Request failed (${startRes.status})`);
+    }
+    const startData = await startRes.json();
+    jobIdRef.current = startData.job_id;
+    setProgress({ completed: 0, total: startData.total_batches, inFlight: 0 });
+
+    pollingActiveRef.current = true;
+    while (pollingActiveRef.current) {
+      const res = await fetch(`${API_BASE}/match/${startData.job_id}`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Status check failed (${res.status})`);
+      }
+      const data = await res.json();
+      setProgress({ completed: data.completed_batches, total: data.total_batches, inFlight: data.in_flight_count || 0 });
+      setRetryCount(data.retry_count || 0);
+      setRetryReasons(data.retry_reasons || {});
+      setFailedBatches(data.failed_batches || 0);
+      setResults(data.matches || []); // progressive — updates every poll, not just at completion
+
+      if (data.status === "done" || data.status === "cancelled") {
+        setWasCancelled(data.status === "cancelled");
+        setStatus("done");
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 800)); // poll interval
+    }
+  }
+
+  // Smart search's "plan" step (classify) + deterministic dispatch +
+  // single reflect/escalate step. See docs/architecture.md for the full
+  // design writeup and app/services/router_service.py for the routing
+  // rule this mirrors on the backend.
+  async function runSmartSearch(filterBody, controller) {
+    let decision;
+    try {
+      const res = await fetch(`${API_BASE}/smart-search/classify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filters: filterBody, preferences: preferences.trim(), ai_provider: selectedAiProvider }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Request failed (${res.status})`);
+      }
+      const data = await res.json();
+      decision = { route: data.route, reason: data.reason, requirements: data.requirements || [], escalated: false };
+    } catch (err) {
+      if (err.name === "AbortError") throw err; // user-initiated cancel — let the outer catch handle it normally
+      decision = {
+        route: "match",
+        reason: "Couldn't classify the query — defaulting to AI-scored matching.",
+        requirements: [],
+        escalated: false,
+      };
+    }
+    setRoutingDecision(decision);
+
+    if (decision.route === "traditional") {
+      await runTraditionalSearch(filterBody, controller);
+      return;
+    }
+
+    if (decision.route === "vector") {
+      const matches = await runVectorSearch(filterBody, controller);
+      if (matches.length === 0) {
+        // Reflect: the chosen path came back empty — escalate once to the
+        // AI-scored path rather than showing "nothing matched" for a query
+        // vector search may simply have misjudged.
+        setRoutingDecision({
+          route: "match",
+          reason: "Vector search returned no matches — escalating to AI-scored matching.",
+          requirements: decision.requirements,
+          escalated: true,
+        });
+        await runMatchSearch(filterBody, controller);
+        return;
+      }
+      setResults(matches);
+      setStatus("done");
+      return;
+    }
+
+    // decision.route === "match"
+    await runMatchSearch(filterBody, controller);
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
 
-    if (!skipAI && !preferences.trim()) {
+    if (searchMode !== "traditional" && searchMode !== "smart" && !preferences.trim()) {
       setValidationError("Describe what you're looking for — even a few phrases helps the matching. Or switch to Traditional mode above to search with filters only, no AI.");
       return;
     }
@@ -436,6 +589,7 @@ function App() {
     setRetryReasons({});
     setFailedBatches(0);
     setWasCancelled(false);
+    setRoutingDecision(null);
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -473,20 +627,7 @@ function App() {
 
     try {
       if (skipAI) {
-        // Browse-all mode: hits /listings, hard filters only, no Claude call
-        const res = await fetch(`${API_BASE}/listings`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(filterBody),
-          signal: controller.signal,
-        });
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.detail || `Request failed (${res.status})`);
-        }
-        const data = await res.json();
-        setResults(data.listings || []);
-        setStatus("done");
+        await runTraditionalSearch(filterBody, controller);
         return;
       }
 
@@ -496,64 +637,22 @@ function App() {
         // listings is sub-millisecond work, nothing here is slow enough
         // to need the AI-mode's background-job machinery. No LLM call at
         // all in this path — see app/routers/vector_search.py.
-        const res = await fetch(`${API_BASE}/vector-search`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filters: filterBody, preferences: preferences.trim() }),
-          signal: controller.signal,
-        });
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.detail || `Request failed (${res.status})`);
-        }
-        const data = await res.json();
-        setResults(data.matches || []);
+        const matches = await runVectorSearch(filterBody, controller);
+        setResults(matches);
         setStatus("done");
         return;
       }
 
-      // AI-matching mode: start a background job, then poll for progress.
-      // This is what makes Cancel actually stop further Claude/OpenAI calls,
-      // instead of just abandoning the browser's wait on one big request.
-      const startRes = await fetch(`${API_BASE}/match/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filters: filterBody,
-          preferences: preferences.trim(),
-          ai_provider: selectedAiProvider,
-        }),
-        signal: controller.signal,
-      });
-      if (!startRes.ok) {
-        const errData = await startRes.json().catch(() => ({}));
-        throw new Error(errData.detail || `Request failed (${startRes.status})`);
+      if (searchMode === "smart") {
+        await runSmartSearch(filterBody, controller);
+        return;
       }
-      const startData = await startRes.json();
-      jobIdRef.current = startData.job_id;
-      setProgress({ completed: 0, total: startData.total_batches, inFlight: 0 });
 
-      pollingActiveRef.current = true;
-      while (pollingActiveRef.current) {
-        const res = await fetch(`${API_BASE}/match/${startData.job_id}`);
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.detail || `Status check failed (${res.status})`);
-        }
-        const data = await res.json();
-        setProgress({ completed: data.completed_batches, total: data.total_batches, inFlight: data.in_flight_count || 0 });
-        setRetryCount(data.retry_count || 0);
-        setRetryReasons(data.retry_reasons || {});
-        setFailedBatches(data.failed_batches || 0);
-        setResults(data.matches || []); // progressive — updates every poll, not just at completion
-
-        if (data.status === "done" || data.status === "cancelled") {
-          setWasCancelled(data.status === "cancelled");
-          setStatus("done");
-          return;
-        }
-        await new Promise((r) => setTimeout(r, 800)); // poll interval
-      }
+      // ai_assisted / nlp_only: start a background job, then poll for
+      // progress. This is what makes Cancel actually stop further
+      // Claude/OpenAI calls, instead of just abandoning the browser's wait
+      // on one big request.
+      await runMatchSearch(filterBody, controller);
     } catch (err) {
       if (err.name === "AbortError") {
         setStatus("idle"); // user-initiated cancel of the Browse-all call
@@ -567,6 +666,18 @@ function App() {
       );
     }
   }
+
+  // Which path actually produced (or will produce) the current results —
+  // for the 4 manually-picked tabs this is just a constant restating the
+  // tab itself; for Smart search it's only known once the classify step
+  // responds (null until then). Decouples "which tab is active"
+  // (searchMode — controls which inputs show) from "which underlying path
+  // is being displayed" (used below to pick the right copy/labels/data
+  // interpretation for the current results, regardless of which tab
+  // requested them).
+  const displayRoute = searchMode === "smart"
+    ? (routingDecision ? routingDecision.route : null)
+    : skipAI ? "traditional" : isVectorMode ? "vector" : "match";
 
   return (
     <React.Fragment>
@@ -685,6 +796,25 @@ function App() {
               <span className="mode-selector__hint">Experimental — no AI reasoning</span>
             </button>
           </div>
+
+          {/* Smart search isn't a peer of the 4 above — it dispatches TO
+              one of them, so it's set apart visually rather than crammed
+              into the same grid (which was the previous, cramped 5-column
+              layout). A divider makes that relationship legible at a
+              glance instead of just being "tab #5". */}
+          <div className="mode-selector__divider">
+            <span>or let the agent choose</span>
+          </div>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={searchMode === "smart"}
+            className={`mode-selector__option mode-selector__option--smart mode-selector__option--full${searchMode === "smart" ? " mode-selector__option--active" : ""}`}
+            onClick={() => setSearchMode("smart")}
+          >
+            <span className="mode-selector__option-title">Smart search</span>
+            <span className="mode-selector__hint">Give filters, text, or both — the agent picks Traditional, Vector search, or AI-scored matching for you</span>
+          </button>
 
           {searchMode !== "nlp_only" && searchMode !== "vector" && (
             <div className="field-group">
@@ -861,6 +991,8 @@ function App() {
                     ? "Describe, in your own words, what your ideal home looks like!"
                     : searchMode === "vector"
                     ? "Describe your ideal home — ranked by description similarity, not AI reasoning."
+                    : searchMode === "smart"
+                    ? "Describe your ideal home (or leave it blank and use filters only) — the agent picks the best way to search it."
                     : "Describe, in your own words, the details that make a difference!"}
                 </label>
                 <textarea
@@ -882,9 +1014,17 @@ function App() {
           <div className="button-row">
             <button type="submit" className="submit-btn" disabled={status === "loading"}>
               {status === "loading" ? (
-                <React.Fragment><span className="spinner" />{skipAI ? "Loading..." : isVectorMode ? "Searching..." : "Matching..."}</React.Fragment>
+                <React.Fragment><span className="spinner" />{
+                  displayRoute === null ? "Routing..."
+                    : displayRoute === "traditional" ? "Loading..."
+                    : displayRoute === "vector" ? "Searching..."
+                    : "Matching..."
+                }</React.Fragment>
               ) : (
-                skipAI ? "Browse all" : isVectorMode ? "Find similar listings" : "Find my matches"
+                searchMode === "smart" ? "Find my matches"
+                  : skipAI ? "Browse all"
+                  : isVectorMode ? "Find similar listings"
+                  : "Find my matches"
               )}
             </button>
             {status === "loading" ? (
@@ -904,6 +1044,15 @@ function App() {
             <div className="error-banner">
               <p className="error-banner__title">Something went wrong</p>
               <p className="error-banner__body">{errorMessage}</p>
+            </div>
+          )}
+
+          {searchMode === "smart" && routingDecision && (
+            <div className={`routing-badge${routingDecision.escalated ? " routing-badge--escalated" : ""}`}>
+              <span className="routing-badge__label">
+                {routingDecision.escalated ? "Escalated to" : "Routed to"} {ROUTE_LABELS[routingDecision.route] || routingDecision.route}
+              </span>
+              <span className="routing-badge__reason">{routingDecision.reason}</span>
             </div>
           )}
 
@@ -928,6 +1077,8 @@ function App() {
                   ? "Just describe what you're looking for below — no filters needed. The AI reads each listing's full description to find real fits."
                   : searchMode === "vector"
                   ? "Experimental: just describe what you're looking for below — ranked purely by embedding similarity to each listing's description. No AI reasoning, no filters — a comparison point for the AI-only mode, not a replacement for it."
+                  : searchMode === "smart"
+                  ? "Give filters, freeform text, or both — the agent breaks your description into requirements and picks whichever of Traditional, Vector search, or AI-scored matching fits best, then shows you which it picked and why."
                   : "Fill in your criteria and describe what you're actually looking for — the AI reads each listing's description, not just its specs, to find real fits."}
               </p>
             </div>
@@ -936,12 +1087,17 @@ function App() {
           {status === "loading" && (
             <div className="state-panel">
               <p className="state-panel__title">
-                {skipAI ? "Loading listings..." : isVectorMode ? "Ranking by similarity..." : "Scoring listings..."}
+                {displayRoute === null ? "Deciding how to search..."
+                  : displayRoute === "traditional" ? "Loading listings..."
+                  : displayRoute === "vector" ? "Ranking by similarity..."
+                  : "Scoring listings..."}
               </p>
               <p className="state-panel__body">
-                {isVectorMode
+                {displayRoute === null
+                  ? "Breaking down your description to pick the best search path."
+                  : displayRoute === "vector"
                   ? "Embedding your query and ranking listings by description similarity — no AI reasoning involved."
-                  : !skipAI && progress.total > 0
+                  : displayRoute === "match" && progress.total > 0
                   ? `Scored ${progress.completed} of ${progress.total} batches${progress.inFlight > 0 ? ` — ${progress.inFlight} running concurrently right now` : ""}. Click Cancel any time to stop and see what's been scored so far.`
                   : "Pulling candidates, then scoring each one against what you described."}
               </p>
@@ -985,13 +1141,12 @@ function App() {
           {status !== "error" && results.length > 0 && (() => {
             // Browse-all results (Traditional) and Vector search results
             // both have no requirements/score data at all — just show them
-            // as one flat list in either case. isVectorMode is checked
-            // FIRST and separately from Traditional, not folded into the
-            // same skipAI-driven branch — a vector result genuinely isn't
-            // "traditional" (it still shows a similarity score, unlike a
-            // plain browse-all listing), it just also lacks
-            // requirements_total the way Traditional's raw listings do.
-            const hasRequirementData = !skipAI && !isVectorMode && results.some((l) => typeof l.requirements_total === "number");
+            // as one flat list in either case. Keyed off displayRoute, not
+            // searchMode/skipAI/isVectorMode directly, so this reads
+            // correctly for Smart search too — its results can genuinely be
+            // any of the 3 underlying shapes, decided at runtime by the
+            // routing decision, not by which tab is active.
+            const hasRequirementData = displayRoute === "match" && results.some((l) => typeof l.requirements_total === "number");
 if (!hasRequirementData) {
   return (
     <div className="result-grid">
@@ -999,11 +1154,11 @@ if (!hasRequirementData) {
         <ResultCard
           key={listing.mls_id}
           listing={listing}
-          isTraditional={skipAI}
+          isTraditional={displayRoute === "traditional"}
           matchedByLabel={
-            skipAI || isVectorMode
-              ? null
-              : (AI_PROVIDER_LABELS[selectedAiProvider] || selectedAiProvider)
+            displayRoute === "match"
+              ? (AI_PROVIDER_LABELS[selectedAiProvider] || selectedAiProvider)
+              : null
           }
         />
       ))}

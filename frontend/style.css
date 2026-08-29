@@ -19,6 +19,7 @@
   --good: #4cb37e;
   --warn: #e2a63c;
   --vector: #9b7ede; /* experimental vector-search mode — deliberately its own hue, not a shade of --good/--warn, since it's a different methodology (embedding similarity) not a match-quality signal */
+  --smart: #4fb8c4; /* Smart (agent-routed) search — its own hue too, distinct from --vector: this mode's whole point is that it dispatches to one of the OTHER methodologies, so it shouldn't visually read as "another one of them" */
 
   --font-display: 'Space Grotesk', system-ui, sans-serif;
   --font-body: 'IBM Plex Sans', system-ui, sans-serif;
@@ -289,13 +290,64 @@ button {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr 1fr;
   gap: 8px;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
 }
 
 @media (max-width: 560px) {
   .mode-selector {
     grid-template-columns: 1fr 1fr;
   }
+}
+
+/* Smart search sits below the 4-way grid, not inside it — it dispatches
+   TO one of those 4, so it's a different kind of choice, not a 5th peer.
+   The divider makes that relationship visible instead of just shrinking
+   everything to fit one more column. */
+.mode-selector__divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 8px;
+  color: var(--muted-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mode-selector__divider::before,
+.mode-selector__divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.mode-selector__option--full {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  margin-bottom: 20px;
+}
+
+.mode-selector__option--full .mode-selector__option-title {
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.mode-selector__option--full .mode-selector__hint {
+  margin-top: 0;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.mode-selector__option--full.mode-selector__option--active .mode-selector__hint {
+  color: var(--paper);
 }
 
 .mode-selector__option {
@@ -326,6 +378,11 @@ button {
 .mode-selector__option--vector.mode-selector__option--active {
   background: rgba(155, 126, 222, 0.28);
   border-color: var(--vector);
+}
+
+.mode-selector__option--smart.mode-selector__option--active {
+  background: rgba(79, 184, 196, 0.28);
+  border-color: var(--smart);
 }
 
 .mode-selector__hint {
@@ -825,6 +882,42 @@ button {
 
 .result-card__similarity strong {
   color: var(--vector);
+}
+
+/* Smart search's routing decision — shown above the results, not hidden
+   in logs. Same visual language as .result-card__similarity above: a
+   left-accented note block, not a full alert/banner, since this is
+   informational context about the results, not a warning. */
+.routing-badge {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  background: rgba(79, 184, 196, 0.06);
+  border-left: 2px solid var(--smart);
+  padding: 10px 12px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin-bottom: 14px;
+}
+
+.routing-badge__label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--smart);
+}
+
+.routing-badge--escalated {
+  border-left-color: var(--warn);
+  background: rgba(226, 166, 60, 0.06);
+}
+
+.routing-badge--escalated .routing-badge__label {
+  color: var(--warn);
 }
 
 .requirements-badge {
