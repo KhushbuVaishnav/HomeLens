@@ -332,6 +332,7 @@ function App() {
   const [selectedDataSource, setSelectedDataSource] = useState(null);
   const [selectedAiProvider, setSelectedAiProvider] = useState(null);
   const [routingDecision, setRoutingDecision] = useState(null); // Smart search only: {route, reason, requirements, escalated}
+  const [vectorMeta, setVectorMeta] = useState(null); // Vector search only: {topK, candidatePool} — lets the UI say "top 20 of 500", not just a bare count
 
   useEffect(() => {
     fetch(`${API_BASE}/`)
@@ -373,6 +374,7 @@ function App() {
     setFailedBatches(0);
     setWasCancelled(false);
     setRoutingDecision(null);
+    setVectorMeta(null);
   }, [searchMode]);
 
   // Keep the City field matching whichever source is active — e.g. a
@@ -429,6 +431,7 @@ function App() {
     setFailedBatches(0);
     setWasCancelled(false);
     setRoutingDecision(null);
+    setVectorMeta(null);
   }
 
   // The three execution paths, extracted out of handleSubmit so Smart
@@ -468,6 +471,7 @@ function App() {
       throw new Error(errData.detail || `Request failed (${res.status})`);
     }
     const data = await res.json();
+    setVectorMeta({ topK: data.top_k, candidatePool: data.candidate_pool });
     return data.matches || [];
   }
 
@@ -590,6 +594,7 @@ function App() {
     setFailedBatches(0);
     setWasCancelled(false);
     setRoutingDecision(null);
+    setVectorMeta(null);
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -762,7 +767,10 @@ function App() {
               className={`mode-selector__option${searchMode === "traditional" ? " mode-selector__option--active" : ""}`}
               onClick={() => setSearchMode("traditional")}
             >
-              <span className="mode-selector__option-title">Traditional</span>
+              <span className="mode-selector__option-heading">
+                <span className="mode-selector__radio" aria-hidden="true" />
+                <span className="mode-selector__option-title">Traditional</span>
+              </span>
               <span className="mode-selector__hint">Filters only, no AI</span>
             </button>
             <button
@@ -772,7 +780,10 @@ function App() {
               className={`mode-selector__option mode-selector__option--llm${searchMode === "ai_assisted" ? " mode-selector__option--active" : ""}`}
               onClick={() => setSearchMode("ai_assisted")}
             >
-              <span className="mode-selector__option-title">Filters + AI</span>
+              <span className="mode-selector__option-heading">
+                <span className="mode-selector__radio" aria-hidden="true" />
+                <span className="mode-selector__option-title">Filters + AI</span>
+              </span>
               <span className="mode-selector__hint">Narrow, then let AI match</span>
             </button>
             <button
@@ -782,7 +793,10 @@ function App() {
               className={`mode-selector__option mode-selector__option--llm${searchMode === "nlp_only" ? " mode-selector__option--active" : ""}`}
               onClick={() => setSearchMode("nlp_only")}
             >
-              <span className="mode-selector__option-title">AI only</span>
+              <span className="mode-selector__option-heading">
+                <span className="mode-selector__radio" aria-hidden="true" />
+                <span className="mode-selector__option-title">AI only</span>
+              </span>
               <span className="mode-selector__hint">Just describe it</span>
             </button>
             <button
@@ -792,7 +806,10 @@ function App() {
               className={`mode-selector__option mode-selector__option--vector${searchMode === "vector" ? " mode-selector__option--active" : ""}`}
               onClick={() => setSearchMode("vector")}
             >
-              <span className="mode-selector__option-title">Vector search</span>
+              <span className="mode-selector__option-heading">
+                <span className="mode-selector__radio" aria-hidden="true" />
+                <span className="mode-selector__option-title">Vector search</span>
+              </span>
               <span className="mode-selector__hint">Similarity search — no AI reasoning</span>
             </button>
           </div>
@@ -812,7 +829,10 @@ function App() {
             className={`mode-selector__option mode-selector__option--smart mode-selector__option--full${searchMode === "smart" ? " mode-selector__option--active" : ""}`}
             onClick={() => setSearchMode("smart")}
           >
-            <span className="mode-selector__option-title">Agent search</span>
+            <span className="mode-selector__option-heading">
+              <span className="mode-selector__radio" aria-hidden="true" />
+              <span className="mode-selector__option-title">Agent search</span>
+            </span>
             <span className="mode-selector__hint">Nothing here is required — filters, text, both, or neither. The agent figures out the best way to search whatever you give it.</span>
           </button>
 
@@ -1067,6 +1087,12 @@ function App() {
             </div>
           )}
 
+          {displayRoute === "vector" && vectorMeta && status !== "loading" && (
+            <p className="results-header__note">
+              Top {vectorMeta.topK} of {vectorMeta.candidatePool} candidates by similarity — not all listings above a quality bar, just the highest-ranked {vectorMeta.topK}.
+            </p>
+          )}
+
           {status === "idle" && (
             <div className="state-panel">
               <p className="state-panel__title">No search run yet</p>
@@ -1076,7 +1102,7 @@ function App() {
                   : searchMode === "nlp_only"
                   ? "Just describe what you're looking for below — no filters needed. The AI reads each listing's full description to find real fits."
                   : searchMode === "vector"
-                  ? "Experimental: just describe what you're looking for below — ranked purely by embedding similarity to each listing's description. No AI reasoning, no filters — a comparison point for the AI-only mode, not a replacement for it."
+                  ? "Just describe what you're looking for below — no filters needed. Ranked purely by embedding similarity to each listing's description, no AI reasoning involved."
                   : searchMode === "smart"
                   ? "Give filters, freeform text, or both — the agent breaks your description into requirements and picks whichever of Traditional, Vector search, or AI-scored matching fits best, then shows you which it picked and why."
                   : "Fill in your criteria and describe what you're actually looking for — the AI reads each listing's description, not just its specs, to find real fits."}

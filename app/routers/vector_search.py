@@ -43,4 +43,12 @@ def vector_search(request: MatchRequest):
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    return {"count": len(results), "matches": results}
+    # top_k/candidate_pool let the frontend say what actually happened —
+    # "top 20 of 500 candidates by similarity," not just a bare count that
+    # reads like "only 20 listings matched." See VECTOR_TOP_K in config.py.
+    return {
+        "count": len(results),
+        "matches": results,
+        "top_k": settings.VECTOR_TOP_K,
+        "candidate_pool": len(listings),
+    }

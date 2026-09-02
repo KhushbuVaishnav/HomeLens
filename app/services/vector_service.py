@@ -99,14 +99,19 @@ def index_listings(listings: list[dict], data_source: str, on_progress=None) -> 
     return len(listings)
 
 
-def semantic_search(query: str, listings: list[dict], data_source: str, top_k: int = 20) -> list[dict]:
+def semantic_search(query: str, listings: list[dict], data_source: str, top_k: int | None = None) -> list[dict]:
     """Embeds `query`, brute-force cosine-similarity-ranks it against
     whichever of `listings` have a stored embedding for this data_source,
     returns the top_k as listing dicts with a `similarity` field added
     (0-1 float), best first. Listings with no stored embedding yet
     (index_listings never run, or run for a different data_source) are
     silently skipped rather than erroring — same "don't crash on missing
-    data" philosophy as _compute_deterministic_scores' fallback path."""
+    data" philosophy as _compute_deterministic_scores' fallback path.
+
+    top_k defaults to settings.VECTOR_TOP_K (not a hardcoded number) —
+    callers that want every candidate ranked (e.g. scripts/vector_eval_dashboard.py)
+    still pass an explicit top_k=len(listings) to override it."""
+    top_k = top_k if top_k is not None else settings.VECTOR_TOP_K
     if not VEC_DB_PATH.exists():
         raise RuntimeError(
             f"{VEC_DB_PATH.name} doesn't exist yet — run "

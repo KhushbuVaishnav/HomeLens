@@ -366,6 +366,64 @@ button {
   margin-top: 0;
 }
 
+/* Radio-style selection dot on EVERY mode, not just Agent search — all 5
+   need to read as one consistent "pick one of these" set. The 4-tab grid
+   happened to already look like a choice-set from its uniform button
+   shapes alone, but adding the dot only to the 5th (differently-shaped)
+   option looked bolted-on rather than part of the same design language,
+   so it's applied uniformly here instead. */
+.mode-selector__option-heading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.mode-selector__option--full .mode-selector__option-heading {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.mode-selector__radio {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--muted-dim);
+  background: transparent;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.mode-selector__option--full .mode-selector__radio {
+  width: 16px;
+  height: 16px;
+}
+
+.mode-selector__option:hover .mode-selector__radio {
+  border-color: var(--line-bright);
+}
+
+.mode-selector__option--active .mode-selector__radio {
+  border-color: var(--blueprint);
+  background: var(--blueprint);
+  box-shadow: inset 0 0 0 3px var(--panel-raised);
+}
+
+.mode-selector__option--vector.mode-selector__option--active .mode-selector__radio {
+  border-color: var(--vector);
+  background: var(--vector);
+}
+
+.mode-selector__option--full:hover .mode-selector__radio {
+  border-color: var(--smart);
+}
+
+.mode-selector__option--full.mode-selector__option--active .mode-selector__radio {
+  border-color: var(--smart);
+  background: var(--smart);
+  box-shadow: inset 0 0 0 3px var(--panel-raised);
+}
+
 .mode-selector__option {
   background: var(--panel-raised);
   border: 1px solid var(--line);
@@ -651,6 +709,13 @@ button {
 .results-header__count {
   font-family: var(--font-mono);
   font-size: 12px;
+  color: var(--muted);
+}
+
+.results-header__note {
+  margin: -8px 0 16px;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--muted);
 }
 

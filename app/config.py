@@ -91,6 +91,15 @@ class Settings:
     # --- Matching behavior ---
     BATCH_SIZE: int = int(os.environ.get("BATCH_SIZE", 8))
     SCORE_THRESHOLD: int = int(os.environ.get("SCORE_THRESHOLD", 60))
+    VECTOR_TOP_K: int = int(os.environ.get("VECTOR_TOP_K", 20))
+    # Vector search has no equivalent of SCORE_THRESHOLD — raw cosine
+    # similarity isn't a calibrated 0-100 scale the way a requirements-met
+    # score is (measured directly: the same absolute similarity value means
+    # completely different things for different queries — see
+    # docs/architecture.md §6), so there's no principled floor to filter by.
+    # This is a fixed result COUNT instead, same "measure before setting a
+    # number" spirit as the other tuning values here — just configurable
+    # instead of hardcoded, not a claim that 20 is somehow the right number.
     TEMPERATURE: float = float(os.environ.get("TEMPERATURE", 0.2))
     MAX_TOKENS: int = int(os.environ.get("MAX_TOKENS", 2000))
     REQUEST_TIMEOUT_SECONDS: int = int(os.environ.get("REQUEST_TIMEOUT_SECONDS", 60))
