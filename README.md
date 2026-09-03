@@ -3,9 +3,9 @@
 A real-estate listing search POC. Search single-family/condo listings with
 structured filters (price, beds, schools, HOA, accessibility), then have an
 LLM re-rank results by reading each listing's actual description against a
-buyer's freeform preferences — plus a fourth, experimental mode that ranks
-by embedding similarity instead, with no LLM call at all, and a fifth mode
-where an agent picks whichever of the other three fits the query best.
+buyer's freeform preferences — plus a fourth mode that ranks by embedding
+similarity instead, with no LLM call at all, and a fifth mode where an
+agent picks whichever of the other three fits the query best.
 
 FastAPI backend, dependency-free React frontend (React + Babel via CDN, no
 build step), SQLite for structured data. Three interchangeable AI providers
@@ -18,12 +18,12 @@ build step), SQLite for structured data. Three interchangeable AI providers
 | **Traditional** | Hard filters only | None | `POST /listings` |
 | **Filters + AI** | Hard filters, then AI re-ranks the result by preferences | LLM, batched | `POST /match` |
 | **AI-only** | None — preferences drive everything | LLM, batched | `POST /match` (filters nulled) |
-| **Vector search** *(experimental)* | None | Embedding similarity, no LLM | `POST /vector-search` |
-| **Smart search** *(agent-routed)* | Optional, passed through unchanged | One small classify call, then dispatches to one of the 3 rows above | `POST /smart-search/classify`, then whichever endpoint it names |
+| **Vector search** *(semantic search)* | None | Embedding similarity, no LLM | `POST /vector-search` |
+| **Agent search** *(routes automatically)* | Optional, passed through unchanged | One small classify call, then dispatches to one of the 3 rows above | `POST /smart-search/classify`, then whichever endpoint it names |
 
 Filters+AI and AI-only run as a background job with progress polling (large
 datasets need many batched LLM calls); Traditional and Vector search are
-single synchronous requests. Smart search is two calls: the classify step,
+single synchronous requests. Agent search is two calls: the classify step,
 then a normal call into whichever mode above the classify step picked.
 
 ## Architecture
@@ -43,7 +43,7 @@ app/
 │   ├── matching_service.py       AI scoring + query classification — Anthropic/OpenAI/Vertex behind one switch
 │   ├── schools_service.py        School ratings lookup (SQLite-backed)
 │   ├── vector_service.py         Embedding + brute-force cosine similarity search
-│   └── router_service.py         Smart search's routing decision — pure logic, no I/O
+│   └── router_service.py         Agent search's routing decision — pure logic, no I/O
 └── data/                       Datasets, schools DB, listing embeddings
 ```
 
@@ -109,7 +109,7 @@ At `generated` scale, `matching_service.py` sends `ceil(listings/BATCH_SIZE)`
 batched calls to the AI provider per search — use hard filters to narrow
 the pool first, or "Browse all (skip AI)" in the frontend for zero AI cost.
 
-## Vector search (experimental)
+## Vector search (semantic search)
 
 A standalone 4th mode: embeds listing descriptions and the buyer's query
 with Vertex's `text-embedding-005`, ranks by brute-force cosine similarity
@@ -123,8 +123,19 @@ Build the index once per dataset, ahead of time (not automatic on startup):
 python scripts/build_listing_embeddings.py --data-source realistic
 python scripts/build_listing_embeddings.py --data-source generated
 ```
-Stores vectors in `app/data/listings_vec.db`. Only `realistic`/`generated`
-are supported — `live` is third-party data, not ours to pre-index.
+Stores vectors in `app/data/listings_vec.db`, which is committed to the
+repo (same precedent as `schools.db` — pre-built, read-only at runtime,
+safe to redeploy) so a fresh deploy always has it, rather than gitignored
+and silently missing until someone remembers to rebuild it. Only
+`realistic`/`generated` are supported — `live` is third-party data, not
+ours to pre-index.
+
+Every search always returns a fixed **count**, not everything above a
+quality bar — there's no equivalent of `SCORE_THRESHOLD` here, since raw
+cosine similarity isn't a calibrated scale (see limitations below). That
+count is `VECTOR_TOP_K` (default 20, configurable in `.env`), and the UI
+always shows it plainly — "Top 20 of 500 candidates by similarity," not a
+bare count that could be misread as "only 20 matched."
 
 **Known limitations** (embedding similarity, not a bug in this app):
 negation ("not a ranch-style home") is largely invisible to embeddings,
@@ -136,7 +147,7 @@ dense embedding retrieval generally, not specific to this dataset — see
 `scripts/vector_eval_dashboard.py` for measured accuracy against ground
 truth, and `docs/architecture.md` §6 for the full design writeup.
 
-## Smart search (agent-routed)
+## Agent search
 
 A 5th mode: give filters and/or freeform text, no rules enforced, and the
 app decides which of the other 3 modes actually handles the query —

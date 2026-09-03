@@ -8,11 +8,11 @@ The frontend offers five explicit search modes:
 - **Traditional** — hard filters only, zero AI involvement
 - **Filters + AI** — hard filters narrow the pool, then AI scores what's left
 - **AI only** — pure natural language, zero hard filters
-- **Vector search (experimental)** — pure embedding-similarity ranking
+- **Vector search (semantic search)** — pure embedding-similarity ranking
   against listing descriptions, zero hard filters, **zero LLM calls at
   all**. A standalone learning/comparison tool sitting alongside the other
   four, not a replacement for any of them — see §6.
-- **Smart search (agent-routed)** — filters and/or freeform text, no rules
+- **Agent search (agent-routed)** — filters and/or freeform text, no rules
   enforced on the input. A small LLM call decomposes the text into
   requirements, then deterministic code — not the LLM — picks whichever of
   the other three paths fits, runs it, and shows which one it picked and
@@ -41,9 +41,9 @@ flowchart LR
         UC5(Select AI provider)
         UC6(Verify a match<br/>inspect raw listing text)
         UC7(Score a listing against<br/>buyer's preferences)
-        UC8(Vector search — experimental<br/>rank by embedding similarity,<br/>zero LLM calls)
+        UC8(Vector search — semantic search<br/>rank by embedding similarity,<br/>zero LLM calls)
         UC9(Embed a listing description<br/>for similarity ranking)
-        UC10(Smart search — agent-routed<br/>classify, then dispatch to<br/>UC1, UC2/UC3, or UC8)
+        UC10(Agent search — agent-routed<br/>classify, then dispatch to<br/>UC1, UC2/UC3, or UC8)
         UC11(Classify a query into<br/>requirement clauses)
     end
 
@@ -102,7 +102,7 @@ are present — see §8).
 
 ```mermaid
 flowchart TD
-    Frontend["app.jsx<br/>React SPA, static<br/>5 modes: Traditional / Filters+AI / AI-only / Vector search / Smart search"]
+    Frontend["app.jsx<br/>React SPA, static<br/>5 modes: Traditional / Filters+AI / AI-only / Vector search / Agent search"]
     Main["main.py<br/>assembly"]
     ListingsRouter["listings.py<br/>router"]
     MatchRouter["match.py<br/>router"]
@@ -123,7 +123,7 @@ flowchart TD
     Frontend -->|Traditional mode| ListingsRouter
     Frontend -->|"Filters+AI or AI-only mode"| MatchRouter
     Frontend -->|"Vector search mode"| VectorRouter
-    Frontend -->|"Smart search mode<br/>(classify, then dispatches to<br/>whichever of the above the<br/>decision names)"| SmartRouter
+    Frontend -->|"Agent search mode<br/>(classify, then dispatches to<br/>whichever of the above the<br/>decision names)"| SmartRouter
     Main -. includes .-> ListingsRouter
     Main -. includes .-> MatchRouter
     Main -. includes .-> VectorRouter
@@ -165,7 +165,7 @@ itself — the actual search always happens through whichever of
 `ListingsRouter`/`MatchRouter`/`VectorRouter` the frontend calls next,
 based on the decision. This keeps `SmartRouter`'s own cost bounded to
 always just the one small classify call, and keeps the three existing
-search paths completely unmodified — Smart search is purely additive.
+search paths completely unmodified — Agent search is purely additive.
 
 ---
 
@@ -269,7 +269,7 @@ sequenceDiagram
     Note over FE,Router: One request, one response — no job_id,<br/>no polling loop, no AI provider ever contacted.<br/>This is the entire flow for Traditional mode.
 ```
 
-## 4c. Sequence Diagram — Vector Search (experimental)
+## 4c. Sequence Diagram — Vector Search (semantic search)
 
 Synchronous like Traditional (no background job — a brute-force
 similarity scan over hundreds of listings is sub-millisecond work,
@@ -309,7 +309,7 @@ sequenceDiagram
     Note over FE,Router: One request, one response — no job_id, no polling,<br/>no matching_service import anywhere in this path.
 ```
 
-## 4d. Sequence Diagram — Smart Search (agent-routed)
+## 4d. Sequence Diagram — Agent Search (agent-routed)
 
 Two round trips to the backend, not one: a small, fast classify call
 first, then a normal call to whichever of the other 3 endpoints the
@@ -326,7 +326,7 @@ sequenceDiagram
     participant AI as Claude / OpenAI / Gemini
     participant Next as ListingsRouter /<br/>MatchRouter /<br/>VectorRouter
 
-    Buyer->>FE: Enter filters and/or preferences,<br/>click "Find my matches" (Smart search mode)
+    Buyer->>FE: Enter filters and/or preferences,<br/>click "Find my matches" (Agent search mode)
     FE->>SR: POST /smart-search/classify
     activate SR
     alt preferences is non-empty
@@ -358,7 +358,7 @@ sequenceDiagram
         Next-->>FE: results
     end
 
-    FE-->>Buyer: render result cards (same as the underlying<br/>mode's own rendering — Smart search adds<br/>only the routing badge on top)
+    FE-->>Buyer: render result cards (same as the underlying<br/>mode's own rendering — Agent search adds<br/>only the routing badge on top)
 ```
 
 ---
@@ -409,11 +409,11 @@ flowchart LR
 | 8 | Traditional mode has a stronger privacy profile | Never contacts Anthropic, OpenAI, or Vertex AI — structurally guaranteed, since `ListingsRouter` never imports `matching_service` |
 | 9 | Vertex AI's auth model has no static secret at all | Authenticates via Google Cloud's Application Default Credentials (local `gcloud auth application-default login`, or the Cloud Run service's own identity in production) — nothing resembling `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` exists for this provider, so there's no equivalent key to leak, rotate, or accidentally commit |
 | 10 | Vector search has an even narrower reach than the other AI-using modes | `VectorRouter` never imports `matching_service` — structurally cannot contact Anthropic or OpenAI at all, in either direction, regardless of `AI_PROVIDER`. Its only external call is Gemini's embedding model — never a chat/completion model, never sees or acts on anything resembling a prompt-injection surface the way `match_reason` generation does |
-| 11 | Smart search's classify step reaches the same 3 providers as scoring | `SmartRouter` imports `matching_service`, so it carries the same reach/cost profile as `MatchRouter` — no new external surface, just a smaller, cheaper call (no listings payload). It never imports `vector_service` or runs a search itself — routing is a decision only, execution always happens through the existing routers above, unchanged |
+| 11 | Agent search's classify step reaches the same 3 providers as scoring | `SmartRouter` imports `matching_service`, so it carries the same reach/cost profile as `MatchRouter` — no new external surface, just a smaller, cheaper call (no listings payload). It never imports `vector_service` or runs a search itself — routing is a decision only, execution always happens through the existing routers above, unchanged |
 
 ---
 
-## 6. Vector Search (experimental) — self-hosted semantic search
+## 6. Vector Search — self-hosted semantic search
 
 **Implemented**, as a standalone 4th search mode — not the pre-filter
 design originally sketched in this section. That earlier idea (narrow the
@@ -477,6 +477,15 @@ than accumulating duplicates. Only `realistic`/`generated` are supported
 — `live` is SimplyRETS' external, dynamic sandbox data, not ours to
 pre-index.
 
+`listings_vec.db` is committed to the repo — same precedent as
+`schools.db` (pre-built, read-only at runtime, safe to redeploy) —
+**not** gitignored. It used to be gitignored as "regenerable + large
+binary," but that meant every fresh deploy built from git had no vector
+index at all: a real, reproduced failure — `POST /vector-search` (and
+Agent search whenever it routes there) returning a clean "database
+doesn't exist yet" error on a freshly deployed instance, discovered when
+the deployed app was actually exercised, not caught by any local test.
+
 ### Query time — see §4c for the full sequence diagram
 
 One synchronous request (`POST /vector-search`), no job/polling — the
@@ -489,6 +498,20 @@ listings ranked best-first with a `similarity` field attached. No
 "cannot reach an LLM" guarantee Traditional mode already has, just for a
 different reason (this mode's entire point is being an independent
 comparison point, so it must never accidentally call one).
+
+### Result count is a fixed top-K, not a quality threshold
+
+`semantic_search()` always returns the top `VECTOR_TOP_K` results (default
+20, configurable in `.env` — see `config.py`), not everything above some
+"good match" bar. There's no equivalent of `SCORE_THRESHOLD` here: raw
+cosine similarity isn't a calibrated 0-100 scale the way a requirements-met
+score is — measured directly (see the negation/compound-clause findings
+below and in §8), the same similarity number means different things for
+different queries, so no single floor would be safe to filter by. The API
+response includes `top_k` and `candidate_pool` alongside the results, and
+the frontend always shows them plainly ("Top 20 of 500 candidates by
+similarity — not all listings above a quality bar") rather than a bare
+count that could be misread as "only 20 listings matched this well."
 
 ### What this is actually for, and its known real limitation
 
@@ -629,14 +652,14 @@ together with `--review`.
 
 ---
 
-## 8. Smart Search (agent-routed) — a simplified deep-agent pattern
+## 8. Agent Search (agent-routed) — a simplified deep-agent pattern
 
 **Implemented**, as a 5th, standalone search mode. The goal: let a user
 give filters and/or freeform text with no rules enforced, and have the
 app itself decide which of the other 3 execution paths (Traditional,
 AI-scored matching, Vector search) actually handles the query — then run
 it and show which path was taken and why. Nothing about the other 4 modes
-changes; Smart search calls the exact same endpoints they already call,
+changes; Agent search calls the exact same endpoints they already call,
 adding only a classification step in front and a dispatch decision.
 
 ### Why "simplified deep agent," specifically
@@ -652,7 +675,7 @@ that don't fit in one context window and need revision as they go.
 
 A single HomeLens search doesn't have that problem — it fits comfortably
 in one context window, and there are only 3 possible destinations to pick
-from. So Smart search deliberately keeps only the two ingredients that
+from. So Agent search deliberately keeps only the two ingredients that
 still earn their cost here, and skips the two that would be solving a
 problem this app doesn't have:
 
