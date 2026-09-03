@@ -313,7 +313,7 @@ function ResultCard({ listing, isPartial, matchedByLabel, isTraditional = false 
 function App() {
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [preferences, setPreferences] = useState("");
-  const [searchMode, setSearchMode] = useState("ai_assisted"); // traditional | ai_assisted | nlp_only
+  const [searchMode, setSearchMode] = useState("smart"); // traditional | ai_assisted | nlp_only | vector | smart
   const skipAI = searchMode === "traditional";
   const isVectorMode = searchMode === "vector"; // no AI call either, but a different results shape/flow than skipAI (Traditional)
   const [status, setStatus] = useState("idle"); // idle | loading | error | done

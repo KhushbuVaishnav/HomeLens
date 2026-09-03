@@ -397,11 +397,28 @@ def _log_token_usage(
         # billable LLM call, and silently omits it from those aggregates
         # while still storing everything correctly on the individual trace.
         if input_tokens is not None and output_tokens is not None:
-            run.set(usage_metadata={
+            usage = {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "total_tokens": input_tokens + output_tokens,
-            })
+            }
+            run.set(usage_metadata=usage)
+            # Also propagate up through every ancestor run, not just this
+            # one. Matters specifically for scripts/langsmith_eval.py: its
+            # target() is an extra, undecorated wrapper LangSmith auto-traces
+            # around score_batch() -> this function, so the LLM run ends up
+            # a grandchild of the experiment's root run rather than a direct
+            # child. Verified empirically: eval_dashboard.py's flatter chain
+            # (score_batch is the trace root) picked up usage_metadata fine
+            # with just the line above; langsmith_eval.py's deeper chain
+            # (target -> score_batch -> this function) did not, and the
+            # "evaluators" project kept showing 0 tokens even after real,
+            # successfully-scored runs. Walking parent_run covers both
+            # shapes without needing to know the nesting depth in advance.
+            ancestor = run.parent_run
+            while ancestor is not None:
+                ancestor.set(usage_metadata=usage)
+                ancestor = ancestor.parent_run
         run.metadata.update({
             "provider": provider,
             "batch_size": batch_size,
