@@ -13,4 +13,12 @@ scripts/llm_judge_output.csv
 scripts/analyze_scores_output.csv
 scripts/eval_dashboard.html
 scripts/vector_eval_dashboard_*.html
-app/data/listings_vec.db
+
+# listings_vec.db is INTENTIONALLY committed, not ignored -- same precedent
+# as schools.db (pre-built, read-only at runtime, safe to redeploy). It used
+# to be gitignored as "regenerable + large binary," but that meant every
+# fresh deploy (Cloud Run included) built from git had no vector index at
+# all, breaking Vector search / Agent search with a real 502 the moment
+# anyone hit them. Re-run `python scripts/build_listing_embeddings.py
+# --data-source <realistic|generated>` and commit the result after editing
+# either dataset.
