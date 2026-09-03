@@ -741,7 +741,7 @@ button {
 .state-panel__title {
   font-family: var(--font-display);
   font-size: 16px;
-  color: var(--paper);
+  color: var(--brass-bright);
   margin: 0 0 8px;
 }
 

@@ -1104,7 +1104,7 @@ function App() {
                   : searchMode === "vector"
                   ? "Just describe what you're looking for below — no filters needed. Ranked purely by embedding similarity to each listing's description, no AI reasoning involved."
                   : searchMode === "smart"
-                  ? "Give filters, freeform text, or both — the agent breaks your description into requirements and picks whichever of Traditional, Vector search, or AI-scored matching fits best, then shows you which it picked and why."
+                  ? "Filters, text, both, or neither — nothing here is required. The agent breaks your description into requirements and picks whichever of Traditional, Vector search, or AI-scored matching fits best, then shows you which it picked and why."
                   : "Fill in your criteria and describe what you're actually looking for — the AI reads each listing's description, not just its specs, to find real fits."}
               </p>
             </div>
