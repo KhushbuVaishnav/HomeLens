@@ -66,9 +66,9 @@ const DATA_SOURCE_DEFAULT_CITY = {
 // "live": that source is real third-party data from SimplyRETS' public
 // sandbox API, not something created for this project at all.
 const DATA_SOURCE_NOTES = {
-  generated: "500+ synthetically generated listings for this project — not real property listings.",
-  realistic: "14 hand-written listings for this project — not real property listings.",
-  live: "This makes a real REST call to SimplyRETS' public Sandbox API — a demo environment we're using for this POC. Swap it for their production API and this same integration would return real, current listings. As of our last check, the Sandbox's listings were all in Houston, TX — but unlike our own fixed data, this is a live third-party feed and its coverage could change without any action on our part.",
+  generated: "500+ synthetically generated listings for this project — not real property listings. Purchase listings only, not rentals.",
+  realistic: "14 hand-written listings for this project — not real property listings. Purchase listings only, not rentals.",
+  live: "This makes a real REST call to SimplyRETS' public Sandbox API — a demo environment we're using for this POC. Swap it for their production API and this same integration would return real, current listings. As of our last check, the Sandbox's listings were all in Houston, TX — but unlike our own fixed data, this is a live third-party feed and its coverage could change without any action on our part. Purchase listings only, not rentals.",
 };
 
 const AI_PROVIDER_LABELS = {
