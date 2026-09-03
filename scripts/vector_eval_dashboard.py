@@ -108,6 +108,7 @@ def _evaluate_dimension_graded(dim: dict, listings_by_id: dict, data_source: str
         rows.append({
             "mls_id": mls_id,
             "address": l.get("address"),
+            "description": l.get("description"),
             "rank": rank,
             "similarity": l["similarity"],
             "case": "positive" if actual_positive else "negative",
@@ -268,7 +269,7 @@ def run_ungraded_eval(data_source: str) -> dict:
         dims.append({
             "key": dim["key"], "label": dim["label"], "query": dim["query"], "type": "ungraded",
             "rows": [
-                {"mls_id": l["mls_id"], "address": l.get("address"), "rank": i + 1, "similarity": l["similarity"]}
+                {"mls_id": l["mls_id"], "address": l.get("address"), "description": l.get("description"), "rank": i + 1, "similarity": l["similarity"]}
                 for i, l in enumerate(ranked)
             ],
         })
