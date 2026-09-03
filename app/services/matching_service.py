@@ -261,7 +261,7 @@ def _humanize_anthropic_error(e) -> tuple[str, str]:
     return _CLIENT_MSG_CONFIG, technical
 
 
-@traceable(name="score_batch_anthropic")
+@traceable(name="score_batch_anthropic", run_type="llm")
 def _score_batch_anthropic(user_preferences: str, listings_batch: list[dict], on_retry=None) -> list[dict]:
     import anthropic
 
@@ -389,6 +389,19 @@ def _log_token_usage(
 
     run = get_current_run_tree()
     if run:
+        # Reserved usage_metadata field — this, not free-form metadata below,
+        # is what LangSmith's project-level Total Tokens/Cost/Latency columns
+        # actually read. Requires run_type="llm" on the @traceable call too
+        # (set on _score_batch_anthropic/_openai/_vertex above) — without
+        # both together, LangSmith has no way to recognize this run as a
+        # billable LLM call, and silently omits it from those aggregates
+        # while still storing everything correctly on the individual trace.
+        if input_tokens is not None and output_tokens is not None:
+            run.set(usage_metadata={
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": input_tokens + output_tokens,
+            })
         run.metadata.update({
             "provider": provider,
             "batch_size": batch_size,
@@ -463,7 +476,7 @@ def _humanize_openai_error(e) -> tuple[str, str]:
     return _CLIENT_MSG_CONFIG, f"OpenAI API error ({e.status_code}): {message}"
 
 
-@traceable(name="score_batch_openai")
+@traceable(name="score_batch_openai", run_type="llm")
 def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_retry=None) -> list[dict]:
     import openai
     from openai import OpenAI, AuthenticationError, NotFoundError, APIStatusError, APITimeoutError, APIConnectionError
@@ -555,7 +568,7 @@ def _score_batch_openai(user_preferences: str, listings_batch: list[dict], on_re
     return _parse_response_text(response.choices[0].message.content)
 
 
-@traceable(name="score_batch_vertex")
+@traceable(name="score_batch_vertex", run_type="llm")
 def _score_batch_vertex(user_preferences: str, listings_batch: list[dict], on_retry=None) -> list[dict]:
     """Vertex AI's Gemini, via the google-genai SDK's Vertex mode
     (client = genai.Client(vertexai=True, ...)) — the current, non-deprecated
